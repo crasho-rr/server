@@ -207,6 +207,12 @@ const FILE_TYPE_ROOM_SAVE = '1'
 const FILE_TYPE_IMAGE = '3'
 
 /**
+ * The `UploadFileType` a video is posted under. `storage` files it under `video/`, and
+ * the `cdn` worker serves the uploaded object back from `/video/:asset`.
+ */
+const FILE_TYPE_VIDEO = '4'
+
+/**
  * The game build this server targets, as `YYYY-MM-DD` — read from the same `GAME_VERSION`
  * the auth token and presence carry rather than written out again here, so upgrading the
  * client moves this line with it instead of leaving a stale date on the upload form.
@@ -228,6 +234,11 @@ const CLIENT_BUILD_DATE = `${GAME_VERSION.slice(0, 4)}-${GAME_VERSION.slice(4, 6
  */
 async function uploadRoomBlob(file: File): Promise<string> {
 	return uploadToStorage(file, FILE_TYPE_ROOM_SAVE)
+}
+
+/** Upload a video to the shared CDN bucket under the `video/` prefix. */
+async function uploadVideo(file: File): Promise<string> {
+	return uploadToStorage(file, FILE_TYPE_VIDEO)
 }
 
 /**
@@ -3103,7 +3114,7 @@ function SignupForm({
 					// `accounts` owns the field. Deliberately not fatal — the account exists and
 					// the session is live, and the same field is one call away on the account
 					// page.
-					if (wanted !== '') await saveEmail(wanted).catch(() => {})
+					if (wanted !== '') await saveEmail(wanted).catch(() => { })
 
 					// The session is already stored, so a failure here isn't one they can act on
 					// by retrying: a reload finds them signed in.
@@ -3232,18 +3243,19 @@ function Dashboard({
 		// /claim, because that URL is Discord's registered redirect and has to keep working.
 		...(config?.benefitsEnabled
 			? [
-					{
-						id: 'benefits',
-						label: 'Claim benefits',
-						render: () => <BenefitsPanel account={account} config={config} />,
-					},
-				]
+				{
+					id: 'benefits',
+					label: 'Claim benefits',
+					render: () => <BenefitsPanel account={account} config={config} />,
+				},
+			]
 			: []),
 		...(isAdmin()
 			? [
-					{ id: 'maintenance', label: 'Server maintenance', render: () => <MaintenanceForm /> },
-					{ id: 'coach', label: 'Coach message', render: () => <CoachMessageForm /> },
-				]
+				{ id: 'maintenance', label: 'Server maintenance', render: () => <MaintenanceForm /> },
+				{ id: 'coach', label: 'Coach message', render: () => <CoachMessageForm /> },
+				{ id: 'video', label: 'Video upload', render: () => <VideoUploadForm /> },
+			]
 			: []),
 		// Narrower than the two above: the drop mints tokens, and www's route is developer-only.
 		...(isDeveloper()
@@ -3539,6 +3551,49 @@ function MaintenanceForm() {
 				{done && <p className="ok">{done}</p>}
 				<button type="submit" disabled={pending}>
 					{pending ? 'Broadcasting…' : 'Broadcast maintenance'}
+				</button>
+			</form>
+		</section>
+	)
+}
+
+/** Admin-only: upload a video to the shared CDN bucket under `video/`. */
+function VideoUploadForm() {
+	const [file, setFile] = useState<File | null>(null)
+	const { pending, error, done, run } = useAction()
+
+	return (
+		<section className="card">
+			<h2>Video upload</h2>
+			<p className="muted">
+				Upload a video for the CDN. The file lands under the shared `video/` bucket and is
+				served back by the `cdn` worker at `/video/:asset`.
+			</p>
+			<form
+				onSubmit={(e) => {
+					e.preventDefault()
+					if (!file) return
+					void run(async () => {
+						const filename = await uploadVideo(file)
+						setFile(null)
+						const url = `${where().cdn}/video/${filename}`
+						return `Uploaded — ${url}`
+					})
+				}}
+			>
+				<label>
+					Video file
+					<input
+						type="file"
+						accept="video/*"
+						onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+						required
+					/>
+				</label>
+				{error && <p className="error">{error}</p>}
+				{done && <p className="ok">{done}</p>}
+				<button type="submit" disabled={pending || !file}>
+					{pending ? 'Uploading…' : 'Upload video'}
 				</button>
 			</form>
 		</section>

@@ -353,6 +353,25 @@ const app = new Hono<App>()
 		(c) => serveAsset(c, `avatar/${c.req.param('asset')}`)
 	)
 
+	// Video files by name. These are stored under the same shared CDN bucket and fetched
+	// from `/video/` by the client. A foldered upload resolves the same way as the rest of
+	// the blob prefixes, so the remainder of the path is matched as-is.
+	.get(
+		'/video/:asset{.+}',
+		describeRoute({
+			tags: ['Assets'],
+			summary: 'Serve a video asset',
+			description: [
+				'Streams the object stored under `video/<asset>` — a video file the client downloads',
+				'from the shared CDN bucket. The worker forwards the object directly out of the',
+				'R2 bucket and does not inspect or rewrite the bytes.',
+			].join(' '),
+			parameters: [keyParam('asset', 'The video filename.', true), ...CONDITIONAL_HEADERS],
+			responses: assetResponses('The video asset'),
+		}),
+		(c) => serveAsset(c, `video/${c.req.param('asset')}`)
+	)
+
 // The generated spec. Documentation only — no request is validated against it (see
 // openapi.ts). `hide: true` keeps this route out of its own output.
 app.get(
@@ -367,13 +386,13 @@ app.get(
 					description: [
 						'Binary asset delivery for recflare, a private-server reimplementation of the Rec',
 						'Room backend. Streams the blobs the client downloads while playing — anti-cheat',
-						'signatures, saved room scenes, invention data, generic client uploads and custom',
-						'avatar item assetbundles — out of',
+						'signatures, saved room scenes, invention data, generic client uploads, custom',
+						'avatar item assetbundles and video files — out of',
 						'the shared `recflare-cdn` R2 bucket, plus the JSON config files the client reads',
 						'from `/config/`.',
 						'',
-						'Everything is keyed by prefix (`sigs/`, `room/`, `invention/`, `data/`, `avatar/`) and',
-						'served as',
+						'Everything is keyed by prefix (`sigs/`, `room/`, `invention/`, `data/`, `avatar/`,',
+						'`video/`) and served as',
 						'`application/octet-stream`; the worker never interprets what it hands back. Reads',
 						'are unauthenticated — a caller needs the exact key, which only comes from an',
 						'authenticated call to another worker.',
