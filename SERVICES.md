@@ -25,7 +25,7 @@ apex/`ns` host and isn't listed within it. Each implemented worker has its own
 | Accounts              | `accounts`              | `accounts`              | Player accounts & profile reads/writes (D1)                           |
 | AI                    | `ai`                    | `ai`                    | Game AI access check (always refuses — no model runs here)            |
 | API                   | `api`                   | `api`                   | Core Game API — config, social, avatar, rooms, image uploads (D1, R2) |
-| Auth                  | `auth`                  | `auth`                  | OAuth token issuance (`/connect/token`); (D1)                         |
+| Auth                  | `auth`                  | `auth`                  | OAuth tokens, plus Studio device login (`POST /connect/deviceauthorization`, device-code grant on `/connect/token`); (D1) |
 | BugReporting          | `bugreporting`          | —                       | Not yet implemented                                                   |
 | Cards                 | `cards`                 | `cards`                 | Stub — deploys and answers, no card endpoints yet                     |
 | CDN                   | `cdn`                   | `cdn`                   | Binary CDN — room data (R2)                                           |
@@ -54,7 +54,7 @@ apex/`ns` host and isn't listed within it. Each implemented worker has its own
 | Storage               | `storage`               | —                       | Room uploader                                                         |
 | Strings               | `strings`               | —                       | Not yet implemented                                                   |
 | StringsCDN            | `strings-cdn`           | —                       | Not yet implemented                                                   |
-| Studio                | `studio`                | —                       | Not yet implemented                                                   |
+| Studio                | `studio`                | —                       | No worker. The editor calls **Auth** for device login and **Accounts** for `GET /account/me`. The approval page is **WWW** `/device` |
 | Thorn                 | `thorn`                 | —                       | Not yet implemented                                                   |
 | Videos                | `videos`                | —                       | Not yet implemented                                                   |
-| WWW                   | `www`                   | —                       | Website/Panel                                                         |
+| WWW                   | `www`                   | `www`                   | Website, including the Studio sign-in page at `/device`              |

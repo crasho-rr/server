@@ -10,7 +10,10 @@ authenticates players and issues the JWTs every other worker verifies.
 | GET    | `/eac/challenge`                           | EAC handshake; a constant, JSON-quoted, as text        |
 | GET    | `/cachedlogin/forplatformid/:platform/:id` | Accounts linked to a platform id, for the login screen |
 | POST   | `/cachedlogin/forplatformids`              | Bulk cached-login lookup (friends resolution)          |
-| POST   | `/connect/token`                           | OAuth token endpoint; issues a JWT + refresh token     |
+| POST   | `/connect/deviceauthorization`             | Studio device login: mint a user code and point the browser at WWW `/device` |
+| POST   | `/connect/device/approve`                  | Website approves that code for the signed-in account  |
+| POST   | `/connect/device/deny`                     | Website refuses it                                     |
+| POST   | `/connect/token`                           | OAuth token endpoint; issues a JWT + refresh token. Studio polls this with the device-code grant |
 | POST   | `/account/me/changepassword`               | Change the caller's password (auth-gated)              |
 | GET    | `/role/developer/:id`                      | Developer role lookup; a bare JSON boolean             |
 | GET    | `/role/moderator/:id`                      | Moderator role lookup; a bare JSON boolean             |
@@ -45,6 +48,10 @@ route without documenting it fails rather than silently shipping an incomplete s
   identity `platform_auth` proves.
 - **`refresh_token`** — redeems a stored single-use refresh token, rotating it.
   30-day TTL; platform and platform id come from what was stored at issue time.
+- **`urn:ietf:params:oauth:grant-type:device_code`** — Rec Room Studio polling a
+  code from `POST /connect/deviceauthorization`. While the player has not approved
+  it on the website, the response is HTTP 400 `authorization_pending`. Studio
+  treats `expires_in` on the token as seconds.
 - **`password`** — the fallback for any unrecognised or absent `grant_type`. Identifies
   the account by `username` or numeric `account_id` and requires the matching password
   (PBKDF2-SHA256, `salt:hash`). An account with no stored hash cannot be logged into at

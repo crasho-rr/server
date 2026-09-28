@@ -27,6 +27,7 @@ import {
 	usernamesFor,
 	where,
 } from './api'
+import { DeviceLinkPage } from './DeviceLink'
 import { customAvatarItemIdFromPath, ItemPage } from './Item'
 import { ModerationPage } from './Moderation'
 import { StatsPage } from './Stats'
@@ -1575,6 +1576,10 @@ export function App() {
 					navigate={navigate}
 					onAuthed={setAccount}
 				/>
+			) : path === '/device' ? (
+				// Studio opens this from verification_uri_complete. The code was minted by
+				// auth; this page only approves it with the website session.
+				<DeviceLinkPage account={account} search={search} navigate={navigate} />
 			) : path === '/account' ? (
 				<AccountPage account={account} config={config} navigate={navigate} onChange={setAccount} />
 			) : path === '/claim' ? (

@@ -31,6 +31,7 @@ import {
 	PLATFORM_SCHEMA_DDL,
 } from '../../platform-db'
 import { consumeRefreshToken, issueRefreshToken, REFRESH_SCHEMA_DDL } from '../../refresh-db'
+import { STUDIO_CLIENT_ID, STUDIO_CLIENT_SECRET, STUDIO_DEVICE_SCHEMA_DDL } from '../../studio-device'
 
 import type { Env } from '../../context'
 
@@ -96,6 +97,7 @@ beforeAll(async () => {
 	// Report table (owned by the api worker) — a ban is a report row with `banned` set;
 	// the token grant reads it for the evasion arms.
 	for (const stmt of REPORTS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
+	for (const stmt of STUDIO_DEVICE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 })
 
 /**
@@ -1645,6 +1647,73 @@ describe('auth worker routes', () => {
 		expect(res.status).toBe(404)
 	})
 
+	test('Studio device login is approved on the website and polled on auth', async () => {
+		const client = `client_id=${STUDIO_CLIENT_ID}&client_secret=${STUDIO_CLIENT_SECRET}`
+		const bad = await exports.default.fetch(`${ORIGIN}/connect/deviceauthorization`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: 'client_id=recroom.studio&client_secret=nope',
+		})
+		expect(bad.status).toBe(400)
+
+		const started = await exports.default.fetch(`${ORIGIN}/connect/deviceauthorization`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: client,
+		})
+		expect(started.status).toBe(200)
+		const codes = (await started.json()) as {
+			device_code: string
+			user_code: string
+			verification_uri: string
+			verification_uri_complete: string
+			expires_in: number
+			interval: number
+		}
+		// The editor opens this in a browser. It is the website, not the auth API.
+		expect(codes.verification_uri).toBe('https://www.rec.example.com/device')
+		expect(codes.verification_uri_complete).toBe(
+			`https://www.rec.example.com/device?user_code=${codes.user_code}`
+		)
+		expect(codes.expires_in).toBeGreaterThan(0)
+		expect(codes.interval).toBeGreaterThan(0)
+
+		const pending = await postToken(
+			`${client}&grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:device_code')}&device_code=${codes.device_code}`
+		)
+		expect(pending.status).toBe(400)
+		expect(pending.json.error).toBe('authorization_pending')
+
+		const session = await postToken(
+			`grant_type=password&username=Player42&password=${LOGIN_PASSWORD}`
+		)
+		expect(session.status).toBe(200)
+		const approved = await exports.default.fetch(`${ORIGIN}/connect/device/approve`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				Authorization: `Bearer ${session.json.access_token}`,
+			},
+			body: `user_code=${codes.user_code}`,
+		})
+		expect(approved.status).toBe(200)
+
+		const signedIn = await postToken(
+			`${client}&grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:device_code')}&device_code=${codes.device_code}`
+		)
+		expect(signedIn.status).toBe(200)
+		expect(typeof signedIn.json.access_token).toBe('string')
+		expect(signedIn.json.expires_in).toBe(TOKEN_TTL_SECONDS)
+		// Studio treats expires_in as seconds, same as the game client.
+		expect(decodePayload(signedIn.json.access_token as string).sub).toBe('42')
+
+		const again = await postToken(
+			`${client}&grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:device_code')}&device_code=${codes.device_code}`
+		)
+		expect(again.status).toBe(400)
+		expect(again.json.error).toBe('invalid_grant')
+	})
+
 	test('GET /openapi.json documents every route', async () => {
 		const res = await exports.default.fetch(`${ORIGIN}/openapi.json`)
 		expect(res.status).toBe(200)
@@ -1677,6 +1746,9 @@ describe('auth worker routes', () => {
 			'POST /account/me/changepassword',
 			'POST /cachedlogin/forplatformid/{platform}/{id}',
 			'POST /cachedlogin/forplatformids',
+			'POST /connect/device/approve',
+			'POST /connect/device/deny',
+			'POST /connect/deviceauthorization',
 			'POST /connect/token',
 		])
 
