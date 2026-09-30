@@ -2066,12 +2066,12 @@ describe('public endpoints', () => {
 		expect(res.status).toBe(400)
 	})
 
-	test('GET /api/progressionEvents/active is a bare -1 (no auth)', async () => {
-		// -1 is the reference server's "no active event" value; the client reads it as "no event
-		// running" and skips the event UI. A 404 would stall its load instead.
+	test('GET /api/progressionEvents/active is a bare 0 (no auth)', async () => {
+		// 0 is the "no active event" value; the client reads it as "no event running" and
+		// skips the event UI. A 404 would stall its load instead.
 		const res = await exports.default.fetch(`${ORIGIN}/api/progressionEvents/active`)
 		expect(res.status).toBe(200)
-		expect(await res.json()).toBe(-1)
+		expect(await res.json()).toBe(0)
 	})
 
 	test('GET /api/rooms/v1/filters returns an object with filter arrays', async () => {
@@ -8675,6 +8675,71 @@ describe('player events', () => {
 		expect([...starts].sort()).toEqual(starts)
 		expect(await search('?take=1')).toEqual([all[0]])
 		expect(await search('?skip=1&take=1')).toEqual([all[1]])
+	})
+
+	test('GET /api/playerevents/v1/search?sort=Attendance ranks by Going replies', async () => {
+		const search = async (qs: string): Promise<PlayerEvent[]> =>
+			(await (await get(`/api/playerevents/v1/search${qs}`)).json()) as PlayerEvent[]
+		const respond = (id: number, type: number, sub: string): Promise<Response> =>
+			post('/api/playerevents/v1/respond', { PlayerEventId: id, Type: type }, sub)
+
+		// Three events sharing a searchable word, created soonest-first so the default
+		// order is the OPPOSITE of the attendance order — the sort has to do something.
+		const quiet = await create({ RoomId: 3, Name: 'Sortable Quiet', StartTime: at(2 * HOUR) })
+		const busy = await create({ RoomId: 3, Name: 'Sortable Busy', StartTime: at(3 * HOUR) })
+		const packed = await create({ RoomId: 3, Name: 'Sortable Packed', StartTime: at(4 * HOUR) })
+		// Every creator is Going from create (1 each). `busy` gains one more Going; `packed`
+		// gains two. Interested and Can't-go on `quiet` don't move it: only a Yes counts.
+		for (const [id, type, sub] of [
+			[busy.PlayerEventId, 0, '43'],
+			[packed.PlayerEventId, 0, '43'],
+			[packed.PlayerEventId, 0, '44'],
+			[quiet.PlayerEventId, 1, '43'],
+			[quiet.PlayerEventId, 1, '44'],
+			[quiet.PlayerEventId, 2, '45'],
+		] as const) {
+			expect((await respond(id, type, sub)).status).toBe(200)
+		}
+
+		// Default and `StartTime`: soonest first.
+		const soonest = [quiet.PlayerEventId, busy.PlayerEventId, packed.PlayerEventId]
+		expect((await search('?query=sortable')).map((e) => e.PlayerEventId)).toEqual(soonest)
+		expect((await search('?query=sortable&sort=StartTime')).map((e) => e.PlayerEventId)).toEqual(
+			soonest
+		)
+
+		// `Attendance`: most Going first (3, 2, 1), case-insensitively.
+		const byAttendance = await search('?query=sortable&sort=Attendance')
+		expect(byAttendance.map((e) => e.PlayerEventId)).toEqual([
+			packed.PlayerEventId,
+			busy.PlayerEventId,
+			quiet.PlayerEventId,
+		])
+		expect(byAttendance.map((e) => e.AttendeeCount)).toEqual([3, 2, 1])
+		expect((await search('?query=sortable&sort=attendance')).map((e) => e.PlayerEventId)).toEqual(
+			byAttendance.map((e) => e.PlayerEventId)
+		)
+
+		// A tie in attendance falls back to soonest first: another 1-Going event, later
+		// than `quiet`, lands after it.
+		const late = await create({ RoomId: 3, Name: 'Sortable Late', StartTime: at(5 * HOUR) })
+		expect((await search('?query=sortable&sort=Attendance')).map((e) => e.PlayerEventId)).toEqual([
+			packed.PlayerEventId,
+			busy.PlayerEventId,
+			quiet.PlayerEventId,
+			late.PlayerEventId,
+		])
+
+		// Paging walks the sorted order, and an unknown sort is the default, not a 400.
+		expect(await search('?query=sortable&sort=Attendance&skip=1&take=1')).toEqual([
+			byAttendance[1],
+		])
+		const unknown = await get('/api/playerevents/v1/search?query=sortable&sort=Popularity')
+		expect(unknown.status).toBe(200)
+		expect(((await unknown.json()) as PlayerEvent[]).map((e) => e.PlayerEventId)).toEqual([
+			...soonest,
+			late.PlayerEventId,
+		])
 	})
 
 	test('GET /api/playerevents/v1 serves the browse feed as listings', async () => {

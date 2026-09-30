@@ -2281,16 +2281,23 @@ const app = new Hono<App>()
 	)
 
 	// The newer client's join-by-player (`/matchmake/v2/player/{playerId}`). Same move as
-	// the v1 follow above — land in the instance the target is standing in — but gated on
-	// the `room_invite` table rather than friendship: the caller must hold a standing
-	// invite FROM the target (the newer client's invite frame doesn't always carry a
-	// redeemable `InviteId` — the party fan-out sends 0 — so it redeems by player instead
-	// of by row id, and this is that path). Everything the target sent stays checkable:
-	// the newest row is enough, since any live row is authorization.
+	// the v1 follow above — land in the instance the target is standing in — and the newer
+	// client sends it for two different buttons, so it admits the caller two ways:
 	//
-	// The row is consumed on a successful join: an invite authorizes one entry, and since
-	// this path follows the target's LIVE presence rather than the room the invite named,
-	// keeping it would leave a standing key into whatever instance they're in later.
+	// - An INVITE: the caller holds a standing `room_invite` row FROM the target (the newer
+	//   client's invite frame doesn't always carry a redeemable `InviteId` — the party
+	//   fan-out sends 0 — so it redeems by player instead of by row id, and this is that
+	//   path). Everything the target sent stays checkable: the newest row is enough, since
+	//   any live row is authorization. The row is consumed on a successful join: an invite
+	//   authorizes one entry, and since this path follows the target's LIVE presence rather
+	//   than the room the invite named, keeping it would leave a standing key into whatever
+	//   instance they're in later.
+	// - A FRIEND in a PUBLIC instance: "Join" on a friend's profile or the friends list,
+	//   which sends no invite at all. Gated on mutual friendship like the v1 follow, and —
+	//   unlike it — on the instance being public: a private session admits people through
+	//   the invite branch, which is what an invite is for. Nothing is consumed.
+	//
+	// Every refusal is checked with the invite (if any) still standing, so a retry works.
 	//
 	// Like the follow and invite paths, this hands out real Photon coordinates without
 	// going through resolveRoomInstance, so it carries its own ban and build checks.
@@ -2303,14 +2310,18 @@ const app = new Hono<App>()
 			summary: 'Join the player who invited you (v2)',
 			description: [
 				'Places the caller into the room instance the target player is currently in, read from',
-				'the target’s stored presence. INVITEES ONLY: the caller must hold a `room_invite` row',
-				'FROM the target (as `POST /invite` writes them) — the newer client redeems an invite by',
-				'its sender when the frame carries no usable `RoomInviteId`. The invite is SINGLE-USE:',
-				'a successful join deletes the row, so the same invite can’t be redeemed again into',
-				'wherever that player goes next (a refusal leaves it standing, so a retry still works).',
+				'the target’s stored presence. Two ways in. INVITE: the caller holds a `room_invite`',
+				'row FROM the target (as `POST /invite` writes them) — the newer client redeems an',
+				'invite by its sender when the frame carries no usable `RoomInviteId`. The invite is',
+				'SINGLE-USE: a successful join deletes the row, so the same invite can’t be redeemed',
+				'again into wherever that player goes next (a refusal leaves it standing, so a retry',
+				'still works). FRIEND: with no invite, a mutual friend may join the target’s PUBLIC',
+				'instance (the profile/friends-list “Join”); a private instance still takes an invite.',
 				'Answers 40',
-				'(RoomInviteExpired) when no invite stands (expiry deletes rows, so “never invited” and',
-				'“expired” are one answer), 2 (PlayerNotOnline) when the target isn’t in a room, 17',
+				'(RoomInviteExpired) when neither holds — not a friend, or a friend whose instance is',
+				'private — so nothing about a stranger’s whereabouts leaks (expiry deletes rows, so',
+				'“never invited” and “expired” are one answer), 2 (PlayerNotOnline) when the target',
+				'isn’t in a room, 17',
 				'(AlreadyInTargetInstance) when the caller is already standing there, 3',
 				'(InsufficientSpace) when it filled up, and 55 (BannedFromRoom) when the caller is',
 				'banned from that room.',
@@ -2342,22 +2353,41 @@ const app = new Hono<App>()
 			if (id === null) return unauthorized(c)
 
 			const targetId = Number.parseInt(c.req.param('playerId'), 10)
-			// The gate: a standing invite from the target to the caller. No row means never
-			// invited or already swept — the same answer either way, since expiry deletes
-			// rows. This also refuses joining yourself: nobody holds a self-invite.
+			// The first key: a standing invite from the target to the caller. No row means
+			// never invited or already swept — the same thing, since expiry deletes rows.
+			// Nobody holds a self-invite, and nobody is their own friend, so joining yourself
+			// is refused by both keys.
 			const invite = await getLatestRoomInviteBetween(c.env.DB, targetId, id)
-			if (invite === null) {
-				logger.info('v2 player matchmake refused: no invite from target', { targetId, id })
+			// The second: mutual friendship, which admits the caller only to a PUBLIC instance
+			// (checked below, once the instance is known). Not read when an invite stands.
+			const friend = invite === null && (await areFriends(c.env.DB, id, targetId))
+			if (invite === null && !friend) {
+				logger.info('v2 player matchmake refused: no invite from target, not a friend', {
+					targetId,
+					id,
+				})
 				return matchmakeResult(c, MatchmakingErrorCode.RoomInviteExpired, null)
 			}
 
-			// Where the inviter is NOW, straight off their presence row — not the invite's
+			// Where the target is NOW, straight off their presence row — not an invite's
 			// stored RoomId, which records where they were when they sent it.
 			const targetPresence = await getPresence<RoomInstance>(c.env.DB, targetId)
 			const instance = targetPresence?.roomInstance ?? null
 			if (!instance) {
 				logger.info('v2 player matchmake refused: target is not in a room', { targetId, id })
 				return matchmakeResult(c, MatchmakingErrorCode.PlayerNotOnline, null)
+			}
+
+			// Friendship alone doesn't open a private session: that's what an invite is for.
+			// The same opaque 40 as a stranger gets — a distinct code would tell a friend the
+			// target is in a private room, which the target's presence settings may hide.
+			if (invite === null && instance.isPrivate) {
+				logger.info('v2 player matchmake refused: friend’s instance is private, no invite', {
+					roomInstanceId: instance.roomInstanceId,
+					targetId,
+					id,
+				})
+				return matchmakeResult(c, MatchmakingErrorCode.RoomInviteExpired, null)
 			}
 
 			// Already standing there: nothing to do, and re-entering would churn presence and
@@ -2407,12 +2437,13 @@ const app = new Hono<App>()
 			// heartbeat replays it and their own friend fan-out fires.
 			await enterRoom(c, id, instance)
 
-			// The invite is spent: it was authorization for THIS join, and leaving the row
+			// An invite is spent: it was authorization for THIS join, and leaving the row
 			// standing would make it a permanent key into whatever instance the target is in
 			// later — this path reads their live presence, not the room the invite named.
 			// Dropped only once the caller is actually in, so every refusal above (target not
 			// in a room, full, banned, wrong build) leaves the invite redeemable for a retry.
-			await deleteRoomInvite(c.env.DB, invite.RoomInviteId)
+			// A friend's join consumed nothing; there's nothing to drop.
+			if (invite !== null) await deleteRoomInvite(c.env.DB, invite.RoomInviteId)
 			return matchmakeResult(c, MatchmakingErrorCode.Success, instance)
 		}
 	)

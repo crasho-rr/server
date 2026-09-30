@@ -1013,8 +1013,34 @@ function bySoonest(a: PlayerEvent, b: PlayerEvent): number {
 }
 
 /**
+ * Best attended first — the count of players who answered Going (`AttendeeCount`, the
+ * number the client shows), which is exactly what the sort is meant to rank. Interested
+ * and Can't-go don't count, as they don't toward the displayed count either. Ties fall
+ * back to soonest first so the order stays stable across pages.
+ */
+function byAttendance(a: PlayerEvent, b: PlayerEvent): number {
+	return b.AttendeeCount - a.AttendeeCount || bySoonest(a, b)
+}
+
+/**
+ * The orders the search serves, by the `sort` the client sends: `StartTime` (soonest
+ * first, the default) and `Attendance` (most Going replies first).
+ */
+export type EventSort = 'StartTime' | 'Attendance'
+
+/**
+ * Reads the `sort` query into an {@link EventSort}, case-insensitively. Anything
+ * unrecognised — or nothing at all — is the default order, soonest first, rather than
+ * a 400: the browse screen has always sent this param and been served regardless.
+ */
+export function parseEventSort(raw: string | undefined): EventSort {
+	return raw?.toLowerCase() === 'attendance' ? 'Attendance' : 'StartTime'
+}
+
+/**
  * Event search — the browse query on the player-events screen. Term by term, an empty
- * query browsing everything upcoming; paginated via skip/take, soonest first.
+ * query browsing everything upcoming; paginated via skip/take, in the order `sort`
+ * names ({@link EventSort}): soonest first by default, or most Going replies first.
  *
  * A term is matched one of two ways, and the `#` decides which:
  *
@@ -1035,7 +1061,8 @@ export async function searchEvents(
 	db: D1Database,
 	query: string,
 	skip: number,
-	take: number
+	take: number,
+	sort: EventSort = 'StartTime'
 ): Promise<PlayerEvent[]> {
 	const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
 	// A `#` prefix makes a term a tag; the rest are matched against the text. A bare `#`
@@ -1067,5 +1094,5 @@ export async function searchEvents(
 		)
 	}
 
-	return events.sort(bySoonest).slice(skip, skip + take)
+	return events.sort(sort === 'Attendance' ? byAttendance : bySoonest).slice(skip, skip + take)
 }
