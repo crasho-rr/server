@@ -12,7 +12,9 @@ import {
 	getPlayerFeed,
 	getSlideshowImages,
 	SavedImageType,
+	setImageAccessibility,
 	setImageCheer,
+	setImageDescription,
 	SLIDESHOW_LIMIT,
 	SLIDESHOW_MAX_LIMIT,
 	toImageMetadata,
@@ -35,6 +37,8 @@ import {
 	json,
 	JsonArray,
 	jsonBody,
+	ModifyImageAccessibilityRequest,
+	ModifyImageDescriptionRequest,
 	pageParams,
 	PhotoTaggingSettingRequest,
 	PhotoTaggingSettingResponse,
@@ -308,8 +312,9 @@ export const imageRoutes = new Hono<App>({ strict: false })
 	// Delete one of the caller's saved images ({ ImageName }). Auth-gated. Looks the
 	// image up by name, refuses unless the caller took it (PlayerId), then removes the
 	// metadata row (and its cheers) and the object from R2. 404 for an unknown image,
-	// 403 for someone else's.
-	.delete(
+	// 403 for someone else's. A POST, not a DELETE: the client posts the JSON body to
+	// this path when a player deletes a photo from their gallery.
+	.post(
 		'/api/images/v1/deletesaved',
 		describeRoute({
 			tags: ['Images'],
@@ -345,6 +350,99 @@ export const imageRoutes = new Hono<App>({ strict: false })
 			await deleteImage(c.env.DB, image)
 			await c.env.IMAGES.delete(imageName)
 
+			return c.json({ success: true })
+		}
+	)
+
+	// Make one of the caller's photos public or private ({ ImageName, Accessibility }).
+	// Auth-gated and owner-only, like deletesaved; additionally refuses an image whose
+	// accessibility moderation has locked. Answers the same `{ success: true }` ack.
+	.post(
+		'/api/images/v2/modifyaccessibility',
+		describeRoute({
+			tags: ['Images'],
+			summary: 'Make one of the caller’s photos public or private',
+			description:
+				'Looks the image up by name and refuses unless the caller took it (or its ' +
+				'accessibility is locked), then sets `Accessibility` on the stored record: 0 ' +
+				'private, 1 public.',
+			security: AUTHED,
+			requestBody: jsonBody(ModifyImageAccessibilityRequest, 'The image and its new accessibility'),
+			responses: {
+				200: json(SuccessResponse, 'Updated'),
+				400: json(ErrorResponse, 'No ImageName, or Accessibility not 0 or 1'),
+				401: UNAUTHORIZED_RESPONSE,
+				403: json(ErrorResponse, 'Not the caller’s image, or its accessibility is locked'),
+				404: { description: 'No image by that name' },
+			},
+		}),
+		async (c) => {
+			const id = await authedId(c)
+			if (id === null) return unauthorized(c)
+
+			const body = (await c.req.json().catch(() => null)) as {
+				ImageName?: unknown
+				Accessibility?: unknown
+			} | null
+			const imageName = typeof body?.ImageName === 'string' ? body.ImageName : ''
+			if (imageName === '') return c.json({ error: 'ImageName is required' }, 400)
+			const accessibility = body?.Accessibility
+			if (accessibility !== 0 && accessibility !== 1) {
+				return c.json({ error: 'Accessibility must be 0 or 1' }, 400)
+			}
+
+			const image = await getImageByName(c.env.DB, imageName)
+			if (!image) return c.notFound()
+			if (image.PlayerId !== id) return c.json({ error: 'Not your image' }, 403)
+			if (image.AccessibilityLocked) return c.json({ error: 'Accessibility is locked' }, 403)
+
+			await setImageAccessibility(c.env.DB, image, accessibility)
+			return c.json({ success: true })
+		}
+	)
+
+	// Set the caption on one of the caller's photos ({ ImageName, Description }).
+	// Auth-gated and owner-only, like deletesaved. An empty or null Description clears
+	// the caption (stored as null, the same as an upload without one).
+	.post(
+		'/api/images/v1/modifydescription',
+		describeRoute({
+			tags: ['Images'],
+			summary: 'Set the caption on one of the caller’s photos',
+			description:
+				'Looks the image up by name and refuses unless the caller took it, then sets ' +
+				'`Description` on the stored record. Null or empty clears it.',
+			security: AUTHED,
+			requestBody: jsonBody(ModifyImageDescriptionRequest, 'The image and its new caption'),
+			responses: {
+				200: json(SuccessResponse, 'Updated'),
+				400: json(ErrorResponse, 'No ImageName, or Description not a string'),
+				401: UNAUTHORIZED_RESPONSE,
+				403: json(ErrorResponse, 'Not the caller’s image'),
+				404: { description: 'No image by that name' },
+			},
+		}),
+		async (c) => {
+			const id = await authedId(c)
+			if (id === null) return unauthorized(c)
+
+			const body = (await c.req.json().catch(() => null)) as {
+				ImageName?: unknown
+				Description?: unknown
+			} | null
+			const imageName = typeof body?.ImageName === 'string' ? body.ImageName : ''
+			if (imageName === '') return c.json({ error: 'ImageName is required' }, 400)
+			const raw = body?.Description ?? null
+			if (raw !== null && typeof raw !== 'string') {
+				return c.json({ error: 'Description must be a string' }, 400)
+			}
+			const description = raw === null || raw.trim() === '' ? null : raw
+
+			const image = await getImageByName(c.env.DB, imageName)
+			if (!image) return c.notFound()
+			if (image.PlayerId !== id) return c.json({ error: 'Not your image' }, 403)
+
+			await setImageDescription(c.env.DB, image, description)
 			return c.json({ success: true })
 		}
 	)
@@ -468,10 +566,11 @@ export const imageRoutes = new Hono<App>({ strict: false })
 		}
 	)
 
-	// Global slideshow feed — the most recent publicly-listable ShareCamera photos
-	// (Accessibility 0 or 1, Type 1) across all rooms, newest first, each joined to its
-	// creator's username and room name. Public (no auth): it only surfaces already-public
-	// images and backs the anonymous homepage slideshow. Returns `{ Images, ValidTill }`,
+	// Global slideshow feed — the most recent public ShareCamera photos (Accessibility 1,
+	// Type 1) across all rooms, newest first, each joined to its creator's username and
+	// room name. Public (no auth): it only surfaces already-public images and backs the
+	// anonymous homepage slideshow. Private photos (Accessibility 0) never appear — the
+	// feed is anonymous, so there is no viewer it could be unlocked for. Returns `{ Images, ValidTill }`,
 	// where ValidTill is a short (2-minute) cache hint the client refreshes against.
 	// Serves 10 by default and never more than SLIDESHOW_MAX_LIMIT (100): it's public and
 	// unauthenticated, so an unclamped `take` would let anyone ask for the whole image

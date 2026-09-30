@@ -1280,14 +1280,16 @@ it('throws a banned player out of the instance they are standing in', async () =
 	expect(frames[0].data.GameSessionId).toBe(77001)
 
 	// The SAME ban the sign-in screen describes, not a generic one: its category, message and
-	// the Duration/TimeoutStartedAt pair, three days from when it was handed down.
+	// `Duration` — the seconds LEFT, which at the instant the ban is handed down is the whole
+	// three days. `TimeoutStartedAt` is not paired with it by the client and stays null.
 	const banned = await getReportById(env.DB, report.id)
 	expect(frames[0].data).toMatchObject({
 		ReportCategory: banned!.report_category,
 		Message: 'Rule violation',
-		TimeoutStartedAt: banned!.banned_at,
-		Duration: 3 * 86_400,
+		TimeoutStartedAt: null,
 	})
+	expect(frames[0].data.Duration).toBeGreaterThan(3 * 86_400 - 5)
+	expect(frames[0].data.Duration).toBeLessThanOrEqual(3 * 86_400)
 
 	// And they are out of that instance — moved into their own DORM, not deleted: `match`
 	// lets a banned player matchmake there and nowhere else, so it is where they read the
