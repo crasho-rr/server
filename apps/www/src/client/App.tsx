@@ -481,7 +481,7 @@ const changePassword = (oldPassword: string, newPassword: string): Promise<unkno
 
 /** Where this account's benefits stand: `www` reads them off the account row. */
 interface BenefitsStatus {
-	/** Whether the account already has Rec Room Plus. */
+	/** Whether the account already has RecFlare Plus. */
 	hasPlus: boolean
 	/** Whether a Discord identity is already tied to it. Which one is deliberately not served. */
 	linked: boolean
@@ -708,8 +708,8 @@ function BenefitsPanel({ account, config }: { account: SelfAccount; config: Site
 			.then((result) => {
 				setStatus({ hasPlus: true, linked: true })
 				const verified = result.discordUsername
-					? `Verified as ${result.discordUsername} — Rec Room Plus is now on your account.`
-					: 'Verified — Rec Room Plus is now on your account.'
+					? `Verified as ${result.discordUsername} — RecFlare Plus is now on your account.`
+					: 'Verified — RecFlare Plus is now on your account.'
 				// The first-link gift, when one was paid: it's sitting in a box in the game, and
 				// the player would otherwise only find it by opening their gifts.
 				const gift = result.tokensAwarded
@@ -737,9 +737,9 @@ function BenefitsPanel({ account, config }: { account: SelfAccount; config: Site
 
 	return (
 		<section className="card">
-			<h2>Rec Room Plus</h2>
+			<h2>RecFlare Plus</h2>
 			<p className="muted">
-				Members of our Discord with a supporter role get Rec Room Plus on their account. Verify with
+				Members of our Discord with a supporter role get RecFlare Plus on their account. Verify with
 				Discord and we’ll check your roles — we only ever read your username and which roles you
 				hold in our server.
 			</p>
@@ -752,7 +752,7 @@ function BenefitsPanel({ account, config }: { account: SelfAccount; config: Site
 			{done && <p className="ok">{done}</p>}
 			{relogin && (
 				<p className="hint">
-					Restart Rec Room and sign in again to pick it up — your game reads Rec Room Plus from the
+					Restart RecFlare and sign in again to pick it up — your game reads RecFlare Plus from the
 					session it signed in with, so it won’t show until then.
 				</p>
 			)}
@@ -766,9 +766,9 @@ function BenefitsPanel({ account, config }: { account: SelfAccount; config: Site
 				<>
 					{!done && (
 						<>
-							<p className="ok">Rec Room Plus is active on this account.</p>
+							<p className="ok">RecFlare Plus is active on this account.</p>
 							<p className="hint">
-								If the game doesn’t show it, sign out and back in — Rec Room Plus is read from the
+								If the game doesn’t show it, sign out and back in — RecFlare Plus is read from the
 								session your game signed in with.
 							</p>
 						</>
