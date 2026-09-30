@@ -3342,6 +3342,98 @@ describe('auth-gated endpoints', () => {
 		).toBe(401)
 	})
 
+	test('POST /matchmake/v2/player/:id lets a friend join a public instance without an invite', async () => {
+		// 8821 stands in a PUBLIC instance; 8822 is a mutual friend (8821 requested), 8823
+		// has a pending request only, 8824 is a stranger.
+		const insertRel = env.DB.prepare(
+			'INSERT INTO relationship (requester_id, target_id, relationship_type) VALUES (?1, ?2, ?3)'
+		)
+		await env.DB.batch([insertRel.bind(8821, 8822, 3), insertRel.bind(8823, 8821, 1)])
+		const instance = await createRoomInstance(env.DB, {
+			ownerAccountId: 8821,
+			roomId: 2,
+			subRoomId: 2,
+			photonRoomId: crypto.randomUUID(),
+			name: '^RecCenter',
+			maxCapacity: 12,
+			isPrivate: false,
+		})
+		const stand = (accountId: number, roomInstance: typeof instance | null) =>
+			setPresence(env.DB, {
+				accountId,
+				roomInstance,
+				statusVisibility: 0,
+				deviceClass: 0,
+				vrMovementMode: 1,
+				platform: 0,
+				appVersion: GAME_VERSION,
+			})
+		await stand(8821, instance)
+
+		const join = async (targetId: number, sub: string) =>
+			(await (
+				await exports.default.fetch(`${ORIGIN}/matchmake/v2/player/${targetId}`, {
+					method: 'POST',
+					headers: {
+						...(await bearer(sub)),
+						'Content-Type': 'application/x-www-form-urlencoded',
+					},
+					body: 'CorrelationId=5d1f0a4e-9a5b-4a3e-8d2b-6f1c2e3a4b5c',
+				})
+			).json()) as { ErrorCode: number; RoomInstance: { RoomInstanceId: number } | null }
+
+		// Not a friend, no invite: 40, whichever way round the non-friendship is.
+		expect(await join(8821, '8824')).toMatchObject({ ErrorCode: 40, RoomInstance: null })
+		expect(await join(8821, '8823')).toMatchObject({ ErrorCode: 40, RoomInstance: null })
+
+		// A friend lands in the public instance with no invite row at all…
+		expect(
+			await env.DB.prepare('SELECT COUNT(*) AS n FROM room_invite WHERE from_player_id = 8821')
+				.first<{ n: number }>()
+		).toMatchObject({ n: 0 })
+		expect(await join(8821, '8822')).toMatchObject({
+			ErrorCode: 0,
+			RoomInstance: { RoomInstanceId: instance.roomInstanceId, IsPrivate: false },
+		})
+		// …and is standing there afterwards, so the same call now says so (17).
+		expect(await join(8821, '8822')).toMatchObject({ ErrorCode: 17, RoomInstance: null })
+
+		// A friend's PRIVATE instance still takes an invite: the same opaque 40 a stranger
+		// gets, so the code doesn't confirm where the friend is.
+		const closed = await createRoomInstance(env.DB, {
+			ownerAccountId: 8821,
+			roomId: 2,
+			subRoomId: 2,
+			photonRoomId: crypto.randomUUID(),
+			name: '^RecCenter',
+			maxCapacity: 12,
+			isPrivate: true,
+		})
+		await stand(8821, closed)
+		await stand(8822, null)
+		expect(await join(8821, '8822')).toMatchObject({ ErrorCode: 40, RoomInstance: null })
+
+		// With an invite the private instance opens, and the invite (not the friendship)
+		// is what's spent: the row is gone after the join.
+		await exports.default.fetch(`${ORIGIN}/invite`, {
+			method: 'POST',
+			headers: {
+				...(await bearer('8821')),
+				'Content-Type': 'application/x-www-form-urlencoded',
+			},
+			body: `playerId=8822&roomInstanceId=${closed.roomInstanceId}`,
+		})
+		expect(await join(8821, '8822')).toMatchObject({
+			ErrorCode: 0,
+			RoomInstance: { RoomInstanceId: closed.roomInstanceId, IsPrivate: true },
+		})
+		expect(
+			await env.DB.prepare(
+				'SELECT COUNT(*) AS n FROM room_invite WHERE from_player_id = 8821 AND to_player_id = 8822'
+			).first<{ n: number }>()
+		).toMatchObject({ n: 0 })
+	})
+
 	test('GET /openapi.json documents every route', async () => {
 		const res = await exports.default.fetch(`${ORIGIN}/openapi.json`)
 		expect(res.status).toBe(200)

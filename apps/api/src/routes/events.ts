@@ -26,6 +26,7 @@ import {
 	inviteToEvent,
 	isEventResponseType,
 	parseEventBody,
+	parseEventSort,
 	parseEventTags,
 	parseEventTime,
 	searchEvents,
@@ -600,14 +601,15 @@ export const eventRoutes = new Hono<App>({ strict: false })
 				'match and the two kinds combine, so `#workshops trigonometry` is the ' +
 				'workshops-tagged events whose text also mentions trigonometry.\n\n' +
 				'Events that have already finished are left out — a name match on something that ' +
-				'ended last month is noise on a browse screen. Soonest first, paginated via ' +
+				'ended last month is noise on a browse screen. Ordered by `sort` and paginated via ' +
 				'skip/take. A bare array.',
 			parameters: [
 				stringQuery('query', 'Search terms; `#tag` matches a tag, anything else the text'),
 				stringQuery(
 					'sort',
-					'Accepted and echoed by the client as `StartTime`, which is the only order ' +
-						'served (soonest first); any other value sorts the same way'
+					'`StartTime` (soonest first, the default) or `Attendance` (most Going replies ' +
+						'first — the event’s `AttendeeCount` — ties soonest first). Case-insensitive; ' +
+						'any other value is served as `StartTime`'
 				),
 				...pageParams(50),
 			],
@@ -616,7 +618,15 @@ export const eventRoutes = new Hono<App>({ strict: false })
 		async (c) => {
 			const skip = Number.parseInt(c.req.query('skip') ?? '', 10) || 0
 			const take = Number.parseInt(c.req.query('take') ?? '', 10) || 50
-			return c.json(await searchEvents(c.env.DB, c.req.query('query') ?? '', skip, take))
+			return c.json(
+				await searchEvents(
+					c.env.DB,
+					c.req.query('query') ?? '',
+					skip,
+					take,
+					parseEventSort(c.req.query('sort'))
+				)
+			)
 		}
 	)
 
