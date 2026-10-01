@@ -18,6 +18,7 @@
  */
 
 import {
+	Accessibility,
 	glyphLength,
 	MAX_EVENT_DESCRIPTION_LENGTH,
 	MAX_EVENT_DURATION_MS,
@@ -951,6 +952,72 @@ export async function getEventsByCreator(
 		.bind(creatorPlayerId)
 		.all<EventRow>()
 	return results.map((r) => JSON.parse(r.data) as PlayerEvent).sort(bySoonest)
+}
+
+/**
+ * One entry of a profile's `Responses` — the event beside the player's RSVP to it. The
+ * event is the 17-key BASE shape (the client's v1 PlayerEvent), not the stored record.
+ */
+export interface PlayerEventWithResponse {
+	PlayerEvent: PlayerEventBase
+	PlayerEventResponse: PlayerEventResponse
+}
+
+/** What anyone may see of a player's events — `GET /api/playerevents/v1/all/{playerId}`. */
+export interface PlayerPublicEvents {
+	Created: PlayerEventBase[]
+	Responses: PlayerEventWithResponse[]
+}
+
+/**
+ * A player's PUBLIC events, as their profile shows them to anyone: the ones they created,
+ * and the ones they are attending — answered Going; a maybe, a decline and an unanswered
+ * invitation are nobody else's business — each soonest first. An event's creator holds a
+ * Going row for it, so their own events appear under both keys.
+ *
+ * Only `Accessibility` Public events are served, and FINISHED ones are left out, as the
+ * browse feed and the room shelf do: this is what the player is going to, not a history.
+ */
+export async function getPublicEventsByPlayer(
+	db: D1Database,
+	playerId: number,
+	now = Date.now()
+): Promise<PlayerPublicEvents> {
+	const at = eventTime(now)
+	const [created, responses] = await db.batch<EventRow & Partial<EventAttendeeRow>>([
+		db
+			.prepare(
+				`SELECT data FROM event
+				 WHERE creator_player_id = ?1 AND end_time >= ?2
+				   AND json_extract(data, '$.Accessibility') = ?3`
+			)
+			.bind(playerId, at, Accessibility.Public),
+		db
+			.prepare(
+				`SELECT e.data AS data, a.rowid AS id, a.event_id, a.player_id, a.status, a.responded_at
+				 FROM event_attendee a
+				 JOIN event e ON e.id = a.event_id
+				 WHERE a.player_id = ?1 AND a.status = ?2 AND e.end_time >= ?3
+				   AND json_extract(e.data, '$.Accessibility') = ?4`
+			)
+			.bind(playerId, EVENT_RESPONSE.going, at, Accessibility.Public),
+	])
+	return {
+		Created: created.results
+			.map((r) => JSON.parse(r.data) as PlayerEvent)
+			.sort(bySoonest)
+			.map(toEventBase),
+		Responses: responses.results
+			.map((r) => ({
+				event: JSON.parse(r.data) as PlayerEvent,
+				response: toEventResponse(r as EventAttendeeRow),
+			}))
+			.sort((a, b) => bySoonest(a.event, b.event))
+			.map(({ event, response }) => ({
+				PlayerEvent: toEventBase(event),
+				PlayerEventResponse: response,
+			})),
+	}
 }
 
 /**

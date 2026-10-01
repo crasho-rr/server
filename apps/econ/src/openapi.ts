@@ -676,6 +676,61 @@ export const CreateRoomKeyRequest = z.object({
 })
 
 /**
+ * `POST /api/roomkeys/v1/awardbulk` — a BARE JSON ARRAY of the keys to award, as the client
+ * posts it. `AccountId` is accepted and IGNORED: the token says who is awarded.
+ */
+export const AwardRoomKeysRequest = z.array(
+	z.object({
+		RoomKeyId: z.int().describe('The key to award — a `room_key` id'),
+		AccountId: z
+			.int()
+			.optional()
+			.describe('Accepted and IGNORED — the caller is who is awarded the key'),
+	})
+)
+
+/**
+ * `POST /api/roomkeys/v1/awardbulk` answers an ARRAY OF ENVELOPES — every element its own
+ * `{ Value, Success, Error, error_id }` around one award (recovered from the client's
+ * decoder). Not a bare array of awards, and not one envelope wrapping a list. Only the
+ * success form has been observed; a failed entry's null `Value` is an assumption.
+ */
+export const AwardRoomKeyResultList = z.array(
+	z.object({
+		Value: z
+			.object({
+				RoomKeyId: z.int(),
+				AccountId: z.int().describe('Who now holds the key — the caller'),
+			})
+			.nullable()
+			.describe('The award, or null on a failure'),
+		Success: z.boolean(),
+		Error: z.string().nullable().describe('Null on success; the failure message otherwise'),
+		error_id: z.null().describe('Always null. Present as a key, and lowercase'),
+	})
+)
+
+/**
+ * `POST /api/roomkeys/v1/owns/bulk` — a BARE JSON ARRAY of (player, key) pairs to check.
+ * Unlike the award's, this `AccountId` is READ: it names whose keys are being asked about.
+ */
+export const OwnsRoomKeysRequest = z.array(
+	z.object({
+		AccountId: z.int().describe('The player being asked about'),
+		RoomKeyId: z.int().describe('The key — a `room_key` id'),
+	})
+)
+
+/** `POST /api/roomkeys/v1/owns/bulk` — a bare array, one answer per pair in the order asked. */
+export const OwnsRoomKeysResponse = z.array(
+	z.object({
+		AccountId: z.int(),
+		RoomKeyId: z.int(),
+		DoesPlayerOwnRoomKey: z.boolean(),
+	})
+)
+
+/**
  * One purchase offer on a room currency — a way to BUY that currency, priced in another
  * ("5 SuperTokens for 500 Rec Center Tokens"). The client's own model, member for member and
  * in its order.

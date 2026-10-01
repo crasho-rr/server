@@ -11,6 +11,8 @@ import {
 	getImagesByRoom,
 	getPlayerFeed,
 	getSlideshowImages,
+	mergePlayerSettings,
+	readPlayerSettings,
 	SavedImageType,
 	setImageAccessibility,
 	setImageCheer,
@@ -100,10 +102,7 @@ async function getPlayerSettings(
 	env: App['Bindings'],
 	accountId: number
 ): Promise<Record<string, string> | null> {
-	return env.RECFLARE_PLAYER_SETTINGS.get<Record<string, string>>(
-		`player:${accountId}`,
-		'json'
-	).catch(() => null)
+	return readPlayerSettings(env.RECFLARE_PLAYER_SETTINGS, accountId).catch(() => null)
 }
 
 /** The caller's stored photo-tagging preference, or the default when they have none. */
@@ -119,19 +118,17 @@ async function readPhotoTaggingSetting(env: App['Bindings'], accountId: number):
  *
  * The write MERGES, as the `playersettings` worker's own PUT does: the map holds every
  * setting the player has (OOBE state, tutorial mask, …), so storing this one on its own
- * would wipe the rest. Read-modify-write on KV isn't atomic, but the same is true there,
- * and racing writers here means one player toggling two of their own options at once.
+ * would wipe the rest. Re-posting the value already stored writes nothing — the client
+ * does that freely, and KV writes are the cost.
  */
 async function writePhotoTaggingSetting(
 	env: App['Bindings'],
 	accountId: number,
 	setting: number
 ): Promise<void> {
-	const stored = (await getPlayerSettings(env, accountId)) ?? {}
-	await env.RECFLARE_PLAYER_SETTINGS.put(
-		`player:${accountId}`,
-		JSON.stringify({ ...stored, [PHOTO_TAGGING_KEY]: String(setting) })
-	)
+	await mergePlayerSettings(env.RECFLARE_PLAYER_SETTINGS, accountId, {
+		[PHOTO_TAGGING_KEY]: String(setting),
+	})
 }
 
 /**

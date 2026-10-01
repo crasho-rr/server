@@ -6742,6 +6742,13 @@ describe('images', () => {
 		// The setting is per-player.
 		expect(await (await read('710')).text()).toBe('2')
 
+		// Re-posting the stored value writes nothing to KV: the raw value is seeded with
+		// whitespace JSON.stringify never produces, and it survives the PUT untouched.
+		const padded = '{ "Recroom.OOBE": "77", "playerPhotoTaggingSetting": "1" }'
+		await env.RECFLARE_PLAYER_SETTINGS.put('player:712', padded)
+		expect(await (await write('712', { Setting: 1 })).text()).toBe('1')
+		expect(await env.RECFLARE_PLAYER_SETTINGS.get('player:712', 'text')).toBe(padded)
+
 		// A body with no readable Setting leaves the stored value alone rather than writing 0
 		// — and answers what the player still has.
 		expect(await (await write('710', { Nothing: true })).text()).toBe('2')
@@ -8962,6 +8969,77 @@ describe('player events', () => {
 		expect(theirs.Created.map((e) => e.PlayerEventId)).toEqual([liveEvent.PlayerEventId])
 	})
 
+	test('GET /api/playerevents/v1/all/:playerId serves a player’s PUBLIC events and Going RSVPs', async () => {
+		const respond = (id: number, type: number, sub: string): Promise<Response> =>
+			post('/api/playerevents/v1/respond', { PlayerEventId: id, Type: type }, sub)
+		interface Profile {
+			Created: PlayerEvent[]
+			Responses: Array<{
+				PlayerEvent: Record<string, unknown>
+				PlayerEventResponse: Record<string, unknown>
+			}>
+		}
+		const profile = async (playerId: number | string): Promise<Profile> => {
+			// No token: the read is public.
+			const res = await get(`/api/playerevents/v1/all/${playerId}`)
+			expect(res.status).toBe(200)
+			return (await res.json()) as Profile
+		}
+
+		// 610 hosts a public event, a private one and a finished one; 611 is Going to the
+		// first two, Interested in a third public one, and went to the finished one.
+		const open = await create({ RoomId: 3, Name: 'Profile Open', StartTime: at(2 * HOUR) }, '610')
+		const closed = await create(
+			{ RoomId: 3, Name: 'Profile Closed', StartTime: at(3 * HOUR), Accessibility: 0 },
+			'610'
+		)
+		const maybe = await create({ RoomId: 3, Name: 'Profile Maybe', StartTime: at(HOUR) }, '610')
+		const over = await create(
+			{ RoomId: 3, Name: 'Profile Over', StartTime: at(-3 * HOUR), EndTime: at(-2 * HOUR) },
+			'610'
+		)
+		await respond(open.PlayerEventId, 0, '611')
+		await respond(closed.PlayerEventId, 0, '611')
+		await respond(maybe.PlayerEventId, 1, '611')
+		await respond(over.PlayerEventId, 0, '611')
+
+		// The attendee: exactly the public event they are Going to, as the pair.
+		const guest = await profile(611)
+		expect(guest.Created).toEqual([])
+		expect(guest.Responses).toHaveLength(1)
+		const [entry] = guest.Responses
+		expect(Object.keys(entry).sort()).toEqual(['PlayerEvent', 'PlayerEventResponse'])
+		expect(entry.PlayerEventResponse).toEqual({
+			PlayerEventResponseId: expect.any(Number),
+			PlayerEventId: open.PlayerEventId,
+			PlayerId: 611,
+			CreatedAt: expect.any(String),
+			Type: 0,
+		})
+		// The 17-key base event: no `State`, `ImageName` a string, the broadcast key present.
+		expect(Object.keys(entry.PlayerEvent)).toHaveLength(17)
+		expect(entry.PlayerEvent).toMatchObject({
+			PlayerEventId: open.PlayerEventId,
+			Name: 'Profile Open',
+			AttendeeCount: 2,
+			Accessibility: 1,
+			ImageName: '',
+			BroadcastingRoomInstanceId: null,
+		})
+		expect(entry.PlayerEvent).not.toHaveProperty('State')
+
+		// The host: their public unfinished events, soonest first, under both keys.
+		const host = await profile(610)
+		const ids = [maybe.PlayerEventId, open.PlayerEventId]
+		expect(host.Created.map((e) => e.PlayerEventId)).toEqual(ids)
+		expect(Object.keys(host.Created[0])).toHaveLength(17)
+		expect(host.Responses.map((r) => r.PlayerEvent.PlayerEventId)).toEqual(ids)
+
+		// Nobody's events, and a non-numeric id doesn't match.
+		expect(await profile(999999)).toEqual({ Created: [], Responses: [] })
+		expect((await get('/api/playerevents/v1/all/abc')).status).toBe(404)
+	})
+
 	test('POST /api/playerevents/v1/respond records an RSVP and recounts attendees', async () => {
 		const respond = async (body: unknown, sub = '42'): Promise<Response> =>
 			post('/api/playerevents/v1/respond', body, sub)
@@ -9778,6 +9856,7 @@ describe('openapi', () => {
 			'GET /api/playerReputation/v2/bulk',
 			'GET /api/playerevents/v1',
 			'GET /api/playerevents/v1/all',
+			'GET /api/playerevents/v1/all/{playerId}',
 			'GET /api/playerevents/v1/bulk',
 			'GET /api/playerevents/v1/club/{clubId}',
 			'GET /api/playerevents/v1/clubs',

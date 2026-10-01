@@ -89,6 +89,31 @@ const TEST_ROOMS = [
 		SubRooms: [{ SubRoomId: 3, UnitySceneId: RECCENTER_SCENE, MaxPlayers: 8 }],
 	},
 	{
+		// UNPUBLISHED (Private): admits its creator, its role holders and its invitees only.
+		RoomId: 6,
+		Name: 'UnpublishedRoom',
+		IsDorm: false,
+		Accessibility: 0,
+		CreatorAccountId: 42,
+		Roles: [
+			{ AccountId: 42, Role: 255, LastChangedByAccountId: null, InvitedRole: 0 },
+			// A host — the lowest tier, and still somebody working on the room.
+			{ AccountId: 44, Role: 10, LastChangedByAccountId: null, InvitedRole: 0 },
+			// Invited to a role but holding none yet: not admitted by the role.
+			{ AccountId: 46, Role: 0, LastChangedByAccountId: 42, InvitedRole: 30 },
+		],
+		SubRooms: [{ SubRoomId: 6, UnitySceneId: RECCENTER_SCENE, MaxPlayers: 8 }],
+	},
+	{
+		// Unlisted: published, just not listed — anyone holding the id may enter.
+		RoomId: 7,
+		Name: 'UnlistedRoom',
+		IsDorm: false,
+		Accessibility: 2,
+		CreatorAccountId: 42,
+		SubRooms: [{ SubRoomId: 7, UnitySceneId: RECCENTER_SCENE, MaxPlayers: 8 }],
+	},
+	{
 		// A single-seat room so one player fills its instance (fullness tests).
 		RoomId: 5,
 		Name: 'SoloRoom',
@@ -615,6 +640,21 @@ describe('public endpoints', () => {
 			)
 			expect(await write(3202, 'avoidJuniors=False')).toBe(false)
 			expect(await stored(3202)).toEqual({ AVOID_JUNIORS: 'False' })
+		})
+
+		// Re-posting the stored value writes nothing to KV — writes are the cost, and the
+		// client posts this freely. The raw value is seeded with whitespace JSON.stringify
+		// never produces; surviving the PUT untouched means no write happened. Holds across
+		// the loose key match too: `AVOID_JUNIORS: 'True'` already says what `avoidJuniors=True`
+		// asks for.
+		test('does not write KV when the value is already stored', async () => {
+			const padded = '{ "Recroom.OOBE": "77", "AVOID_JUNIORS": "True" }'
+			await env.RECFLARE_PLAYER_SETTINGS.put('player:3205', padded)
+			expect(await write(3205, 'avoidJuniors=True')).toBe(true)
+			expect(await env.RECFLARE_PLAYER_SETTINGS.get('player:3205', 'text')).toBe(padded)
+
+			expect(await write(3205, 'avoidJuniors=False')).toBe(false)
+			expect(await stored(3205)).toEqual({ 'Recroom.OOBE': '77', AVOID_JUNIORS: 'False' })
 		})
 
 		test('accepts a JSON body', async () => {
@@ -2924,6 +2964,74 @@ describe('auth-gated endpoints', () => {
 		}
 	})
 
+	test('POST /matchmake/room/:roomId refuses an unpublished room to anyone it does not admit', async () => {
+		// Every spelling of the room matchmake, in both join modes — a PRIVATE instance
+		// of an unpublished room is still a way into it, so JoinMode 2 is gated too.
+		const v1 = async (path: string, sub: string, joinMode: string) =>
+			(await (
+				await exports.default.fetch(`${ORIGIN}${path}`, {
+					method: 'POST',
+					headers: { ...(await bearer(sub)), 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: new URLSearchParams({ JoinMode: joinMode }).toString(),
+				})
+			).json()) as { errorCode: number; roomInstance: { roomId: number } | null }
+		const v2 = async (path: string, sub: string, joinMode: number) =>
+			(await (
+				await exports.default.fetch(`${ORIGIN}${path}`, {
+					method: 'POST',
+					headers: { ...(await bearer(sub)), 'Content-Type': 'application/json' },
+					body: JSON.stringify({ JoinMode: joinMode }),
+				})
+			).json()) as { ErrorCode: number; RoomInstance: { RoomId: number } | null }
+
+		// A stranger: RoomIsPrivate (25) — told plainly, since they hold the id already —
+		// with no instance, on every route and in either join mode.
+		for (const joinMode of ['1', '2']) {
+			expect(await v1('/matchmake/room/6', '9880', joinMode)).toEqual(refused(25))
+			expect(await v1('/matchmake/room/6/6', '9880', joinMode)).toEqual(refused(25))
+		}
+		for (const joinMode of [1, 2]) {
+			expect(await v2('/matchmake/v2/room/6', '9880', joinMode)).toMatchObject({
+				ErrorCode: 25,
+				RoomInstance: null,
+			})
+			expect(await v2('/matchmake/v2/room/6/6', '9880', joinMode)).toMatchObject({
+				ErrorCode: 25,
+				RoomInstance: null,
+			})
+		}
+		// Refused before any instance or presence exists for them.
+		expect(
+			await env.DB.prepare('SELECT 1 AS hit FROM presence WHERE account_id = 9880').first()
+		).toBeNull()
+		expect(
+			await env.DB.prepare('SELECT 1 AS hit FROM room_instance WHERE room_id = 6').first()
+		).toBeNull()
+
+		// The creator and a role holder (a Host, the lowest tier) get in; a pending role
+		// invite (Role 0) is not a role.
+		expect((await v1('/matchmake/room/6', '42', '2')).roomInstance?.roomId).toBe(6)
+		expect((await v2('/matchmake/v2/room/6', '44', 2)).RoomInstance?.RoomId).toBe(6)
+		expect(await v1('/matchmake/room/6', '46', '2')).toEqual(refused(25))
+
+		// A live room invite INTO THAT ROOM admits the invitee — and is not consumed, so a
+		// retry works. An invite to some other room is no key to this one.
+		await env.DB.prepare(
+			`INSERT INTO room_invite (from_player_id, to_player_id, room_id, created_at)
+			 VALUES (42, 9881, 2, ?1), (42, 9880, 6, ?1)`
+		)
+			.bind(Math.floor(Date.now() / 1000))
+			.run()
+		expect(await v1('/matchmake/room/6', '9881', '2')).toEqual(refused(25))
+		expect((await v1('/matchmake/room/6', '9880', '2')).roomInstance?.roomId).toBe(6)
+		expect((await v2('/matchmake/v2/room/6', '9880', 2)).RoomInstance?.RoomId).toBe(6)
+		await env.DB.prepare('DELETE FROM room_invite WHERE to_player_id IN (9880, 9881)').run()
+
+		// Published rooms are untouched: Unlisted is reachable by whoever holds the id.
+		expect((await v1('/matchmake/room/7', '9880', '1')).roomInstance?.roomId).toBe(7)
+		expect((await v2('/matchmake/v2/room/2', '9880', 2)).RoomInstance?.RoomId).toBe(2)
+	})
+
 	test('POST /matchmake/room/:roomId refuses a player banned from the room', async () => {
 		const matchmake = async (sub: string) =>
 			(await (
@@ -3388,8 +3496,9 @@ describe('auth-gated endpoints', () => {
 
 		// A friend lands in the public instance with no invite row at all…
 		expect(
-			await env.DB.prepare('SELECT COUNT(*) AS n FROM room_invite WHERE from_player_id = 8821')
-				.first<{ n: number }>()
+			await env.DB.prepare(
+				'SELECT COUNT(*) AS n FROM room_invite WHERE from_player_id = 8821'
+			).first<{ n: number }>()
 		).toMatchObject({ n: 0 })
 		expect(await join(8821, '8822')).toMatchObject({
 			ErrorCode: 0,

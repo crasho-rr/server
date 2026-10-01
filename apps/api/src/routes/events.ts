@@ -23,6 +23,7 @@ import {
 	getEventTags,
 	getGoingPlayerIds,
 	getLiveEvents,
+	getPublicEventsByPlayer,
 	inviteToEvent,
 	isEventResponseType,
 	parseEventBody,
@@ -64,6 +65,7 @@ import {
 	PlayerEventsPage,
 	PlayerEventTagsRequest,
 	PlayerEventTimeRequest,
+	PlayerPublicEvents,
 	stringQuery,
 	SuccessErrorEnvelope,
 	TagFilters,
@@ -445,6 +447,31 @@ export const eventRoutes = new Hono<App>({ strict: false })
 			if (id === null) return unauthorized(c)
 			return c.json({ Created: await getEventsByCreator(c.env.DB, id), Responses: [] })
 		}
+	)
+
+	// Another player's events, as their profile shows them: PUBLIC events only, and under
+	// `Responses` only the ones they are attending (Going). Public. Unlike the caller's own
+	// `/all` above, both keys carry the client's 17-key base event, and a `Responses` entry
+	// is a PAIR — the event beside the RSVP record.
+	.get(
+		'/api/playerevents/v1/all/:playerId{[0-9]+}',
+		describeRoute({
+			tags: ['Events'],
+			summary: 'A player’s public events',
+			description:
+				'The events on a player’s profile: the PUBLIC ones they created (`Created`) and ' +
+				'the PUBLIC ones they are attending (`Responses`), each soonest first. Public (no ' +
+				'auth); finished events are left out, and a player with none — or an unknown id — ' +
+				'gets two empty lists.\n\n' +
+				'Events are the client’s 17-key BASE event, as on the browse feed. A `Responses` ' +
+				'entry is a pair, `{ PlayerEvent, PlayerEventResponse }`, and only Going RSVPs ' +
+				'(`Type` 0) are listed — a maybe, a decline or an unanswered invitation is not ' +
+				'attending. A creator is Going to their own event, so it appears under both keys.',
+			parameters: [idParam('playerId', 'Player id')],
+			responses: { 200: json(PlayerPublicEvents, 'The player’s public events') },
+		}),
+		async (c) =>
+			c.json(await getPublicEventsByPlayer(c.env.DB, Number.parseInt(c.req.param('playerId'), 10)))
 	)
 
 	// The tag filter chips on the player-events browse screen. Static: these are the

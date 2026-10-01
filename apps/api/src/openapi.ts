@@ -1347,6 +1347,17 @@ export const PlayerEventsAll = z.object({
 	),
 })
 
+/**
+ * `GET /api/playerevents/v1/all/{playerId}` — a player's public events. Both keys carry
+ * the 17-key base event; a `Responses` entry pairs it with the player's RSVP.
+ */
+export const PlayerPublicEvents = z.object({
+	Created: z.array(PlayerEventBaseDto).describe('Public events the player created'),
+	Responses: z
+		.array(z.object({ PlayerEvent: PlayerEventBaseDto, PlayerEventResponse: PlayerEventResponseDto }))
+		.describe('Public events the player is attending, each beside their Going RSVP'),
+})
+
 /** `GET /api/playerevents/v1/club/:clubId` — the paged single-club event feed. */
 export const PlayerEventsPage = z.object({
 	ContinuationToken: z.string().describe('Empty = no next page'),

@@ -31,16 +31,21 @@ import {
 	getRoomInstanceSummariesByRoom,
 	getRoomInvite,
 	getStoredRoomInstance,
+	hasRoomInviteTo,
 	InviteMode,
 	isClubMember,
 	isPlayerBannedFromRoom,
 	MatchmakingErrorCode,
 	MessageType,
 	MOST_ACTIVE_CLUBHOUSE_LIMIT,
+	putPlayerSettingsIfChanged,
+	readPlayerSettings,
 	recordRoomVisit,
 	recordStat,
 	refreshInstanceFullness,
+	Role,
 	RoomInstanceType,
+	roomRoles,
 	setPresence,
 	setRoomInstanceInProgress,
 	setRoomInstancePrivate,
@@ -417,10 +422,7 @@ async function getPlayerSettings(
 	env: Env,
 	accountId: number
 ): Promise<Record<string, string> | null> {
-	return env.RECFLARE_PLAYER_SETTINGS.get<Record<string, string>>(
-		`player:${accountId}`,
-		'json'
-	).catch(() => null)
+	return readPlayerSettings(env.RECFLARE_PLAYER_SETTINGS, accountId).catch(() => null)
 }
 
 /**
@@ -441,15 +443,16 @@ async function readAvoidJuniors(env: Env, accountId: number): Promise<boolean> {
  *
  * The write MERGES, exactly as the `playersettings` worker's own PUT does: the map holds
  * every setting the player has (OOBE state, tutorial mask, …), so storing this one on its
- * own would wipe the rest. Read-modify-write on KV isn't atomic, but the same is true of
- * the settings worker, and two writers racing over one player's own settings means that
- * player toggling two options in the same instant.
+ * own would wipe the rest. The key is whichever spelling the map already carries, which is
+ * why this doesn't go through `mergePlayerSettings` — but like it, re-posting the stored
+ * value writes nothing. A KV read failure throws (a 500) rather than reading as an empty
+ * map, which would store this one key over everything the player had.
  */
 async function writeAvoidJuniors(env: Env, accountId: number, value: boolean): Promise<void> {
-	const stored = (await getPlayerSettings(env, accountId)) ?? {}
+	const stored = await readPlayerSettings(env.RECFLARE_PLAYER_SETTINGS, accountId)
 	const merged: Record<string, string> = { ...stored }
 	merged[findAvoidJuniorsKey(merged) ?? AVOID_JUNIORS_KEY] = value ? 'True' : 'False'
-	await env.RECFLARE_PLAYER_SETTINGS.put(`player:${accountId}`, JSON.stringify(merged))
+	await putPlayerSettingsIfChanged(env.RECFLARE_PLAYER_SETTINGS, accountId, stored, merged)
 }
 
 /**
@@ -737,6 +740,43 @@ function persistenceVersionRefusal(
 		return v !== null && v >= MIN_UNLOADABLE_PERSISTENCE_VERSION_2023
 	})
 	return tooNew ? MatchmakingErrorCode.UpdateRequired : null
+}
+
+/**
+ * "This room is private" — the refusal on a room that isn't published, asked for by id by
+ * someone it doesn't admit (see {@link canEnterRoom}). Told plainly, as the private-event
+ * refusal below is: whoever reaches this holds the room id already, and the only thing an
+ * opaque NoSuchRoom would buy is a room that fails to load for no visible reason.
+ */
+const ROOM_IS_PRIVATE = MatchmakingErrorCode.RoomIsPrivate
+
+/**
+ * Whether a room MATCHMAKE may enter this room at all, before any instance is found or
+ * made. A PUBLISHED room — Public, or Unlisted (reachable by whoever holds the id, just
+ * not listed) — admits anyone; every other accessibility (Private, and the two Dev_ ones)
+ * is a room its owner hasn't released, and admits only:
+ *
+ * - its creator, and anyone holding a role on it (Host and up: everyone named in `Roles`
+ *   is working on the room, whether or not it is published), or
+ * - a player holding a live `room_invite` into it — an invite is how a private room's
+ *   people bring someone in.
+ *
+ * Without this, a private INSTANCE was the only thing "private" meant to the room routes:
+ * `JoinMode` 2 spawned a fresh instance of any room whose id you had, published or not,
+ * and the unpublished builds a player's visit history named were open to anyone who
+ * could read it. Dorms are not gated here — they are Unlisted by construction and reach
+ * their guests through the invite routes, not this one.
+ */
+async function canEnterRoom(db: D1Database, room: Room, accountId: number): Promise<boolean> {
+	if (
+		room.Accessibility === Accessibility.Public ||
+		room.Accessibility === Accessibility.Unlisted
+	) {
+		return true
+	}
+	if (room.CreatorAccountId === accountId) return true
+	if (roomRoles(room).some((r) => r.AccountId === accountId && r.Role !== Role.None)) return true
+	return hasRoomInviteTo(db, accountId, Number(room.RoomId))
 }
 
 /**
@@ -1392,7 +1432,8 @@ async function resolveRoomInstance(
 	roomKey: string,
 	isPrivate: boolean,
 	ownerId: number,
-	requestedSubRoomId?: number
+	requestedSubRoomId?: number,
+	gateOnAccessibility = false
 ): Promise<ResolvedInstance> {
 	const id = Number.parseInt(roomKey, 10)
 	const requested = Number.isNaN(id)
@@ -1411,6 +1452,20 @@ async function resolveRoomInstance(
 	if (await isPlayerBannedFromRoom(c.env.DB, f.roomId, ownerId)) {
 		logger.info('matchmake refused: player banned from room', { roomId: f.roomId, ownerId })
 		return { instance: null, errorCode: BANNED_FROM_ROOM }
+	}
+
+	// An unpublished room admits only its people (see canEnterRoom). Only the ROOM routes
+	// ask for this: an event or a clubhouse matchmake has already decided the caller
+	// belongs (invited to the event, a member of the club) and its room may well be private
+	// — that's what holding an event in your own room looks like. Checked against the room
+	// actually entered, after any substitution, and before an instance exists.
+	if (gateOnAccessibility && !(await canEnterRoom(c.env.DB, room, ownerId))) {
+		logger.info('matchmake refused: room is not published and player is not admitted', {
+			roomId: f.roomId,
+			ownerId,
+			accessibility: room.Accessibility,
+		})
+		return { instance: null, errorCode: ROOM_IS_PRIVATE }
 	}
 
 	// The build this player is on, from their token. A 2023 client can't load a scene
@@ -1484,6 +1539,11 @@ async function resolveRoomInstance(
  * reads the same envelope back — so they are the same handler under a second path rather
  * than a copy that can drift.
  *
+ * The one gate that is these routes' alone is the room's ACCESSIBILITY (see
+ * {@link canEnterRoom}): a room that isn't published answers `RoomIsPrivate` (25) to anyone
+ * but its creator, its role holders and its invitees, in either join mode — a private
+ * instance of an unpublished room is still a way into it.
+ *
  * `subRoomId` is optional: absent, `resolveRoomInstance` falls back to the room's first
  * subroom (its default entrance).
  */
@@ -1498,7 +1558,10 @@ async function matchmakeIntoRoom(c: Context<App>) {
 		c.req.param('roomId') ?? '',
 		joinMode === 2,
 		id,
-		subRoomId
+		subRoomId,
+		// Named by id, so the room's own accessibility is the gate (canEnterRoom): an
+		// unpublished room refuses everyone but its people and its invitees with 25.
+		true
 	)
 	if (!instance) return matchmakeResult(c, errorCode, null)
 	await enterRoom(c, id, instance)
@@ -2728,7 +2791,7 @@ const app = new Hono<App>()
 			responses: {
 				200: json(
 					MatchmakeResponse,
-					'The instance (or a null instance with errorCode 20 on an unknown room, 55 when banned)'
+					'The instance (or a null instance with errorCode 20 on an unknown room, 55 when banned, 25 on an unpublished room the caller is not admitted to)'
 				),
 				401: UNAUTHORIZED_RESPONSE,
 			},
@@ -2753,7 +2816,7 @@ const app = new Hono<App>()
 			responses: {
 				200: json(
 					MatchmakeResponse,
-					'The instance (or a null instance with errorCode 20 on an unknown room, 55 when banned)'
+					'The instance (or a null instance with errorCode 20 on an unknown room, 55 when banned, 25 on an unpublished room the caller is not admitted to)'
 				),
 				401: UNAUTHORIZED_RESPONSE,
 			},
@@ -2803,7 +2866,7 @@ const app = new Hono<App>()
 			responses: {
 				200: json(
 					MatchmakeV2Response,
-					'The instance (or a null RoomInstance with ErrorCode 20 on an unknown room, 55 when banned)'
+					'The instance (or a null RoomInstance with ErrorCode 20 on an unknown room, 55 when banned, 25 on an unpublished room the caller is not admitted to)'
 				),
 				401: UNAUTHORIZED_RESPONSE,
 			},
@@ -2826,7 +2889,7 @@ const app = new Hono<App>()
 			responses: {
 				200: json(
 					MatchmakeV2Response,
-					'The instance (or a null RoomInstance with ErrorCode 20 on an unknown room, 55 when banned)'
+					'The instance (or a null RoomInstance with ErrorCode 20 on an unknown room, 55 when banned, 25 on an unpublished room the caller is not admitted to)'
 				),
 				401: UNAUTHORIZED_RESPONSE,
 			},

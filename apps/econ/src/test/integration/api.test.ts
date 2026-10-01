@@ -2125,6 +2125,109 @@ describe('econ endpoints', () => {
 			expect(free.Price).toBe(0)
 		})
 
+		test('POST awardbulk records the CALLER as holding each key, reporting each entry', async () => {
+			const award = async (payload: unknown, headers?: Record<string, string>) =>
+				exports.default.fetch(`${ORIGIN}/api/roomkeys/v1/awardbulk`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json', ...headers },
+					body: JSON.stringify(payload),
+				})
+			const held = async () =>
+				(
+					await env.DB.prepare(
+						'SELECT room_key_id, account_id, awarded_at FROM room_key_player ORDER BY room_key_id'
+					).all<{ room_key_id: number; account_id: number; awarded_at: string }>()
+				).results
+
+			const key = await keyOf(await create({ ...body, Name: 'awarded' }, await bearer('1')))
+			const id = key.RoomKeyId
+
+			// Auth-gated.
+			expect((await award([{ RoomKeyId: id, AccountId: 42 }])).status).toBe(401)
+			expect(await held()).toEqual([])
+
+			// The body exactly as the client posts it. The token's player gets the key —
+			// the body's `AccountId` is ignored, even when it names someone else.
+			const res = await award(
+				[
+					{ RoomKeyId: id, AccountId: 205 },
+					{ RoomKeyId: 999999, AccountId: 205 },
+					{ AccountId: 205 },
+				],
+				await bearer('42')
+			)
+			expect(res.status).toBe(200)
+			// An array of envelopes, one per entry — `error_id` lowercase beside the rest.
+			const awarded = {
+				Value: { RoomKeyId: id, AccountId: 42 },
+				Success: true,
+				Error: null,
+				error_id: null,
+			}
+			expect(await res.json()).toEqual([
+				awarded,
+				{ Value: null, Success: false, Error: 'No such room key', error_id: null },
+				{ Value: null, Success: false, Error: 'Invalid room key', error_id: null },
+			])
+			const rows = await held()
+			expect(rows).toEqual([{ room_key_id: id, account_id: 42, awarded_at: expect.any(String) }])
+
+			// Held once: a repeat award succeeds and leaves the row as it was.
+			const again = await award([{ RoomKeyId: id, AccountId: 42 }], await bearer('42'))
+			expect(await again.json()).toEqual([awarded])
+			expect(await held()).toEqual(rows)
+
+			// Another player holds their own copy; a body that is no list has no entries.
+			await award([{ RoomKeyId: id }], await bearer('43'))
+			expect((await held()).map((r) => r.account_id).sort()).toEqual([42, 43])
+			expect(await (await award({ RoomKeyId: id }, await bearer('42'))).json()).toEqual([])
+
+			await env.DB.prepare('DELETE FROM room_key_player').run()
+			await env.DB.prepare('DELETE FROM room_key').run()
+		})
+
+		test('POST owns/bulk answers each (player, key) pair, reading the body’s AccountId', async () => {
+			const post = async (path: string, payload: unknown, headers?: Record<string, string>) =>
+				exports.default.fetch(`${ORIGIN}/api/roomkeys/v1/${path}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json', ...headers },
+					body: JSON.stringify(payload),
+				})
+
+			const key = await keyOf(await create({ ...body, Name: 'held' }, await bearer('1')))
+			const id = key.RoomKeyId
+			await post('awardbulk', [{ RoomKeyId: id, AccountId: 42 }], await bearer('42'))
+
+			// Auth-gated.
+			expect((await post('owns/bulk', [{ AccountId: 42, RoomKeyId: id }])).status).toBe(401)
+
+			// Asked by 43 about 42 and others: the body's player is the one checked. A bare
+			// array back, in the order posted; the malformed entry is skipped.
+			const res = await post(
+				'owns/bulk',
+				[
+					{ AccountId: 42, RoomKeyId: id },
+					{ AccountId: 43, RoomKeyId: id },
+					{ AccountId: 42, RoomKeyId: 999999 },
+					{ AccountId: 42 },
+				],
+				await bearer('43')
+			)
+			expect(res.status).toBe(200)
+			expect(await res.json()).toEqual([
+				{ AccountId: 42, RoomKeyId: id, DoesPlayerOwnRoomKey: true },
+				{ AccountId: 43, RoomKeyId: id, DoesPlayerOwnRoomKey: false },
+				{ AccountId: 42, RoomKeyId: 999999, DoesPlayerOwnRoomKey: false },
+			])
+
+			// Nothing to ask is nothing to answer.
+			expect(await (await post('owns/bulk', [], await bearer('43'))).json()).toEqual([])
+			expect(await (await post('owns/bulk', {}, await bearer('43'))).json()).toEqual([])
+
+			await env.DB.prepare('DELETE FROM room_key_player').run()
+			await env.DB.prepare('DELETE FROM room_key').run()
+		})
+
 		test('POST create refuses the eleventh key in a room', async () => {
 			// MaxKeysPerRoom is 10 (apps/api/static/api-config-v2.json). Fill up to it…
 			while ((await keysOf(2511)).length < 10) {
@@ -5962,7 +6065,9 @@ describe('econ endpoints', () => {
 			'POST /api/roomcurrencies/v1/createCurrency',
 			'POST /api/roomcurrencies/v1/createPurchaseOffer',
 			'POST /api/roomcurrencies/v1/updateCurrency',
+			'POST /api/roomkeys/v1/awardbulk',
 			'POST /api/roomkeys/v1/create',
+			'POST /api/roomkeys/v1/owns/bulk',
 			'POST /api/storefronts/v2/buyItem',
 			'POST /api/storefronts/v3/buyInvention',
 			'POST /api/ugcPurchasables/v1/items/bulk',

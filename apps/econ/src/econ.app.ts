@@ -83,6 +83,8 @@ import {
 	AwardRoomConsumablesRequest,
 	AwardRoomCurrencyRequest,
 	AwardRoomCurrencyResultList,
+	AwardRoomKeyResultList,
+	AwardRoomKeysRequest,
 	BalanceEntry,
 	BulkPurchaseRequest,
 	BulkPurchaseResponse,
@@ -119,6 +121,8 @@ import {
 	MakerAiFreeTrialEligibilityResponse,
 	OpaqueJsonBody,
 	OPTIONAL_AUTHED,
+	OwnsRoomKeysRequest,
+	OwnsRoomKeysResponse,
 	ReferralProgressResponse,
 	RoomConsumableDto,
 	RoomConsumableEnvelope,
@@ -158,7 +162,7 @@ import {
 	getRoomCurrency,
 	updateRoomCurrency,
 } from './room-currency-db'
-import { createRoomKey, getRoomKeys } from './room-key-db'
+import { awardRoomKey, createRoomKey, getRoomKeys, ownsRoomKeys } from './room-key-db'
 
 import type { Context } from 'hono'
 import type { GiftContent, Outfit, Progression, StoredGift, XpGrant } from '@repo/domain'
@@ -183,7 +187,7 @@ import type { Equipment } from './equipment-db'
 import type { AvatarItem } from './inventory-db'
 import type { RoomConsumable } from './room-consumable-db'
 import type { RoomCurrency, RoomCurrencyPurchaseOffer } from './room-currency-db'
-import type { RoomKey } from './room-key-db'
+import type { RoomKey, RoomKeyHolding } from './room-key-db'
 
 // Invention storage (owned by the `api` worker, on this same `recflare` database).
 // Imported directly rather than copied: these are plain D1 helpers with no bindings of
@@ -5615,6 +5619,129 @@ const app = new Hono<App>({ strict: false })
 
 			await pushRoomKeyCreated(c, key, accountId)
 			return roomKeyEnvelope(c, key)
+		}
+	)
+
+	// Award the CALLER some room keys. Auth-gated (401); everything else is reported per
+	// entry, each in its OWN `{ Value, Success, Error, error_id }` envelope — the client
+	// decodes a list of single-value envelopes here. The body is a bare array of `{ RoomKeyId,
+	// AccountId }` — `AccountId` is accepted and unused: the token says who gets the key.
+	.post(
+		'/api/roomkeys/v1/awardbulk',
+		describeRoute({
+			tags: ['Econ'],
+			summary: 'Award room keys to the caller',
+			description: [
+				'Records the CALLER as holding each key the body names (`room_key_player`). The body',
+				'is a BARE JSON ARRAY, `[{ "RoomKeyId": 43, "AccountId": 205 }]`; `AccountId` is',
+				'accepted and IGNORED — the token says who is awarded.',
+				'',
+				'A key is held or it isn’t: awarding one the caller already holds succeeds and',
+				'changes nothing.',
+				'',
+				'The answer is an ARRAY OF ENVELOPES — one `{ Value, Success, Error, error_id }` per',
+				'entry, in the order posted, as the client’s decoder reads it; not a bare array of',
+				'awards, and not one envelope around a list. `Value` is `{ RoomKeyId, AccountId }`,',
+				'`AccountId` being the caller. Each entry stands alone: a `RoomKeyId` naming no listed',
+				'key answers `Success` false with a null `Value` (the failure form is an assumption —',
+				'only success has been observed) and leaves the rest to land.',
+				'',
+				'NOTE: this awards to whoever is asking, and nothing is spent for it — the key’s',
+				'`Price` is not charged and no room membership is checked.',
+			].join('\n'),
+			security: AUTHED,
+			requestBody: jsonBody(AwardRoomKeysRequest, 'The keys to give the caller'),
+			responses: {
+				200: json(AwardRoomKeyResultList, 'One result per entry, in the order posted'),
+				401: UNAUTHORIZED_RESPONSE,
+			},
+		}),
+		async (c) => {
+			const accountId = await authedId(c)
+			if (accountId === null) return unauthorized(c)
+
+			const body = await c.req.json<unknown>().catch(() => null)
+			// A body that is no list has no entries to report on.
+			if (!Array.isArray(body)) return c.json([])
+
+			const failed = (error: string) => ({
+				Value: null,
+				Success: false,
+				Error: error,
+				error_id: null,
+			})
+			const results = []
+			for (const entry of body as unknown[]) {
+				const roomKeyId =
+					typeof entry === 'object' && entry !== null
+						? (entry as { RoomKeyId?: unknown }).RoomKeyId
+						: undefined
+				if (typeof roomKeyId !== 'number' || !Number.isInteger(roomKeyId)) {
+					results.push(failed('Invalid room key'))
+					continue
+				}
+
+				const awardedAt = await awardRoomKey(c.env.DB, accountId, roomKeyId)
+				results.push(
+					awardedAt === null
+						? failed('No such room key')
+						: {
+								Value: { RoomKeyId: roomKeyId, AccountId: accountId },
+								Success: true,
+								Error: null,
+								error_id: null,
+							}
+				)
+			}
+
+			return c.json(results)
+		}
+	)
+
+	// Who holds which room key. Auth-gated (401). The body is a bare array of `{ AccountId,
+	// RoomKeyId }` pairs and — unlike the award's — `AccountId` is READ here: a room asks
+	// about the players standing in it, not only the caller. A bare array back, one answer
+	// per pair.
+	.post(
+		'/api/roomkeys/v1/owns/bulk',
+		describeRoute({
+			tags: ['Econ'],
+			summary: 'Whether players hold room keys',
+			description: [
+				'Answers, for each `{ AccountId, RoomKeyId }` pair posted, whether that player holds',
+				'that key (`room_key_player`). The body is a BARE JSON ARRAY, and so is the answer:',
+				'`[{ "AccountId": 205, "RoomKeyId": 43, "DoesPlayerOwnRoomKey": true }]`, one entry',
+				'per pair in the order posted — no envelope, unlike the award beside it.',
+				'',
+				'`AccountId` is honoured, not replaced by the caller: any signed-in player may ask',
+				'about any player. An unknown key or player is simply not held; an entry without two',
+				'integer ids is skipped.',
+			].join('\n'),
+			security: AUTHED,
+			requestBody: jsonBody(OwnsRoomKeysRequest, 'The (player, key) pairs to check'),
+			responses: {
+				200: json(OwnsRoomKeysResponse, 'One answer per pair, in the order posted'),
+				401: UNAUTHORIZED_RESPONSE,
+			},
+		}),
+		async (c) => {
+			const accountId = await authedId(c)
+			if (accountId === null) return unauthorized(c)
+
+			const body = await c.req.json<unknown>().catch(() => null)
+			if (!Array.isArray(body)) return c.json([])
+
+			const pairs: RoomKeyHolding[] = []
+			for (const entry of body as unknown[]) {
+				if (typeof entry !== 'object' || entry === null) continue
+				const { AccountId, RoomKeyId } = entry as Record<string, unknown>
+				if (typeof AccountId !== 'number' || !Number.isInteger(AccountId)) continue
+				if (typeof RoomKeyId !== 'number' || !Number.isInteger(RoomKeyId)) continue
+				pairs.push({ AccountId, RoomKeyId })
+			}
+
+			const owned = await ownsRoomKeys(c.env.DB, pairs)
+			return c.json(pairs.map((pair, i) => ({ ...pair, DoesPlayerOwnRoomKey: owned[i] })))
 		}
 	)
 
