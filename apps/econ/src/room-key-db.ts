@@ -7,7 +7,10 @@
  * a player by being awarded. The endpoints:
  *  - `POST /api/roomkeys/v1/create` lists one
  *  - `GET  /api/roomkeys/v1/room?roomId=` lists a room's
+ *  - `PUT  /api/roomkeys/v1/updateAll` edits one
  *  - `POST /api/roomkeys/v1/awardbulk` awards the caller some
+ *  - `GET  /api/storefronts/v1/buyRoomKey` sells the caller one, for tokens
+ *  - `POST /api/storefronts/v1/PurchaseRoomKeyWithCurrency` sells one for its room currency
  *  - `POST /api/roomkeys/v1/owns/bulk` says who holds which
  *
  * This worker (`econ`) owns the tables and their migrations — see apps/econ/migrations/0024
@@ -24,8 +27,8 @@ export const ROOM_KEY_SCHEMA_DDL: string[] = [
 	// back as the ORDINAL (`Type: 0`) — see {@link ROOM_KEY_TYPE_ORDINALS}. Only `Key` has
 	// been observed.
 	//
-	// `purchase_currency_id` is the `room_currency` the key is charged in — nullable, and the
-	// create body names none. `image_name` is '' in the row (NOT NULL), but the client reads
+	// `purchase_currency_id` is the `room_currency` the key is charged in — null means tokens,
+	// which is what a new key costs: the create body names none, and an edit can set it. `image_name` is '' in the row (NOT NULL), but the client reads
 	// `ImageName` as null until a key carries art, so an empty column is served as null.
 	`CREATE TABLE IF NOT EXISTS room_key (
 		room_key_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,11 +79,11 @@ export interface RoomKey {
 	Name: string
 	Description: string
 	Price: number
-	/** A `room_currency` id, or null — the create body names none. */
+	/** A `room_currency` id, or null for tokens — which is what a new key is priced in. */
 	PurchaseCurrencyId: string | null
 	/** ISO-8601 UTC. */
 	CreatedAt: string
-	/** Null until a key can carry art. */
+	/** Null until an edit gives the key art. */
 	ImageName: string | null
 	/** The key type's ordinal — 0 `Key`. See {@link ROOM_KEY_TYPE_ORDINALS}. */
 	Type: number
@@ -147,6 +150,56 @@ export async function createRoomKey(db: D1Database, key: NewRoomKey): Promise<Ro
 	return toRoomKey(row!)
 }
 
+/** One key by its id, or null when there is no such row. */
+export async function getRoomKey(db: D1Database, roomKeyId: number): Promise<RoomKey | null> {
+	const row = await db
+		.prepare(`SELECT ${SELECT_COLUMNS} FROM room_key WHERE room_key_id = ?1`)
+		.bind(roomKeyId)
+		.first<RoomKeyRow>()
+
+	return row ? toRoomKey(row) : null
+}
+
+/** What an edit may change — the rest of a key (its ids, room, type, `CreatedAt`) is fixed. */
+export interface RoomKeyChanges {
+	Name: string
+	Description: string
+	Price: number
+	/** A `room_currency` id, or null for tokens. */
+	PurchaseCurrencyId: string | null
+	/** The key's art, or null for none — stored as '' (the column is NOT NULL). */
+	ImageName: string | null
+}
+
+/**
+ * Rewrite a key's editable fields, returning it as it now stands — null when `roomKeyId`
+ * names no listed key.
+ */
+export async function updateRoomKey(
+	db: D1Database,
+	roomKeyId: number,
+	changes: RoomKeyChanges
+): Promise<RoomKey | null> {
+	const row = await db
+		.prepare(
+			`UPDATE room_key
+			 SET name = ?2, description = ?3, price = ?4, purchase_currency_id = ?5, image_name = ?6
+			 WHERE room_key_id = ?1
+			 RETURNING ${SELECT_COLUMNS}`
+		)
+		.bind(
+			roomKeyId,
+			changes.Name,
+			changes.Description,
+			changes.Price,
+			changes.PurchaseCurrencyId,
+			changes.ImageName ?? ''
+		)
+		.first<RoomKeyRow>()
+
+	return row ? toRoomKey(row) : null
+}
+
 /**
  * Every key a room has listed, oldest first — the order its owner built them up in. The
  * autoincrement id IS creation order, so it is the sort key.
@@ -203,4 +256,49 @@ export async function ownsRoomKeys(db: D1Database, pairs: RoomKeyHolding[]): Pro
 		pairs.map((pair) => held.bind(pair.RoomKeyId, pair.AccountId))
 	)
 	return results.map((r) => r.results.length > 0)
+}
+
+/**
+ * Take a key for a player ahead of charging them for it: true when this call made them its
+ * holder, false when they already were (or the key is gone). The insert is the atomic step
+ * a sale hangs on — two concurrent buys of one key cannot both claim it, so only one is
+ * charged. A sale that then fails to collect gives the key back with {@link releaseRoomKey}.
+ */
+export async function claimRoomKey(
+	db: D1Database,
+	accountId: number,
+	roomKeyId: number
+): Promise<boolean> {
+	const { meta } = await db
+		.prepare(
+			`INSERT OR IGNORE INTO room_key_player (room_key_id, account_id, awarded_at)
+			 SELECT room_key_id, ?2, ?3 FROM room_key WHERE room_key_id = ?1`
+		)
+		.bind(roomKeyId, accountId, new Date().toISOString())
+		.run()
+	return meta.changes > 0
+}
+
+/** Undo a {@link claimRoomKey} whose sale did not go through. */
+export async function releaseRoomKey(
+	db: D1Database,
+	accountId: number,
+	roomKeyId: number
+): Promise<void> {
+	await db
+		.prepare('DELETE FROM room_key_player WHERE room_key_id = ?1 AND account_id = ?2')
+		.bind(roomKeyId, accountId)
+		.run()
+}
+
+/**
+ * Who a room's key sales pay — the room's `CreatorAccountId`, read off the `room` table's
+ * generated column (the `rooms` worker owns the table). Null when there is no such room.
+ */
+export async function getRoomOwnerId(db: D1Database, roomId: number): Promise<number | null> {
+	const row = await db
+		.prepare('SELECT creator_account_id FROM room WHERE room_id = ?1')
+		.bind(roomId)
+		.first<{ creator_account_id: number | null }>()
+	return row?.creator_account_id ?? null
 }
