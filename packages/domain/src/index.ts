@@ -8,6 +8,7 @@ export {
 } from './enums'
 export * from './accounts-db'
 export * from './studio-access-db'
+export * from './studio-unity-assets'
 export * from './audit-db'
 export * from './clubs-db'
 export * from './d1-binds'

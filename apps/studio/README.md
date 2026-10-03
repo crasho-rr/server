@@ -5,7 +5,9 @@ The RecFlare Studio host (`https://studio.<domain>`).
 Device login stays on Auth, `GET /account/me` stays on Accounts, and the approval
 page is WWW `/device`. This worker answers the editor's build list, stores a
 locally built Windows and Android bundle pair, and answers the co-owner
-presence list.
+presence list. It does not serve the bundle bytes. A stored build is loaded from
+Rooms (`CurrentSave.UnitySubAssets`, and `GET /rooms/{roomId}/subrooms/{subRoomId}/unityasset`)
+and from the CDN at `GET /unityasset/{filename}`.
 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |

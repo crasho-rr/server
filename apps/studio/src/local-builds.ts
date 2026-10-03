@@ -1,4 +1,9 @@
-import { getSubRoom, markRoomAsRecRoomStudio, setSubRoomSaveUnityAssetId } from '@repo/domain'
+import {
+	getSubRoom,
+	markRoomAsRecRoomStudio,
+	publicStudioBundleFilename,
+	setSubRoomSaveUnityAssetId,
+} from '@repo/domain'
 
 /** Mirrors migrations/0001_studio_cloud_build.sql. Tests apply this; deploy uses the file. */
 export const STUDIO_CLOUD_BUILD_SCHEMA_DDL: string[] = [
@@ -136,10 +141,12 @@ export async function storeLocalCloudBuild(
 	const stored = await Promise.all(
 		files.map(async (file) => {
 			const sha256 = await sha256Hex(file.bytes)
-			const r2Key =
-				`studio-room-bundles/${unityAssetId}/${file.platform}/${file.kind}/${file.filename}`
+			// The download route looks a bundle up by filename alone, so the stored
+			// name is this build's, not the uploaded basename two rooms can share.
+			const filename = publicStudioBundleFilename(unityAssetId, file.platform, file.kind)
+			const r2Key = `studio-room-bundles/${unityAssetId}/${file.platform}/${file.kind}/${filename}`
 			await bucket.put(r2Key, file.bytes)
-			return { ...file, sha256, r2Key }
+			return { ...file, filename, sha256, r2Key }
 		})
 	)
 

@@ -361,12 +361,14 @@ describe('local cloud builds', () => {
 				byte_length: number
 				r2_key: string
 			}>()
+		const publicName = (platform: string, kind: string) =>
+			`${first.value.unityAssetId.replace(/-/g, '')}.${platform}.${kind}.assetbundle`
 		expect(
 			files.map((file) => [file.platform, file.kind, file.filename, file.byte_length])
 		).toEqual([
-			['android', 'main', 'quest_bundle.assetbundle', 2],
-			['windows', 'main', 'win.assetbundle', 4],
-			['windows', 'stripped', 'win.Stripped.assetbundle', 3],
+			['android', 'main', publicName('android', 'main'), 2],
+			['windows', 'main', publicName('windows', 'main'), 4],
+			['windows', 'stripped', publicName('windows', 'stripped'), 3],
 		])
 		const win = files.find((file) => file.platform === 'windows' && file.kind === 'main')
 		const stored = await env.CDN_ASSETS.get(win!.r2_key)

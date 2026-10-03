@@ -20,6 +20,13 @@
 import { bindPlaceholders, chunkForBinds, MAX_BOUND_PARAMS } from './d1-binds'
 import { Accessibility, Role } from './enums'
 import { countPlayersByRoom } from './presence-db'
+import {
+	bakedStudioUnityAssets,
+	isMissingStudioAssetTable,
+	listStudioUnityAssetFiles,
+} from './studio-unity-assets'
+
+import type { StudioUnityAssetFile } from './studio-unity-assets'
 
 /** Schema DDL (mirror of the head migration schema, sans the seed INSERT). */
 export const ROOM_SCHEMA_DDL: string[] = [
@@ -1422,10 +1429,12 @@ interface BuildSaveInput {
 
 /**
  * Build a `SubRoomDataSave` in the shape the client parses — the reference's `MapSave`
- * projection. The four array fields are always empty (we neither resolve nor record
- * referenced Unity assets) but must be PRESENT, and `UnityAssetId` is emitted only when
- * the save actually carried one, exactly as the reference does. There is deliberately no
- * `DataBlobHash`: it is commented out of the reference DTO and absent from its output.
+ * projection. The array fields start empty and must be PRESENT. `UnitySubAssets` is
+ * filled in on read when this save's `UnityAssetId` has stored Studio bundles (see
+ * {@link attachStudioUnityAssets}); referenced assets stay empty. `UnityAssetId` is
+ * emitted only when the save actually carried one, exactly as the reference does.
+ * There is deliberately no `DataBlobHash` of our own: the caller stores the hash the
+ * client sent, and a save that carried none keeps it null.
  *
  * `SavedOnPlatform`/`SavedOnDeviceClass` are 0 — the reference fills them from the saving
  * player's live platform/device, which the save request doesn't carry and we don't track.
@@ -2040,6 +2049,52 @@ async function attachCurrentSaves(
 		const id = rows[i]!.current_save_id
 		sub.CurrentSave = id == null ? null : (byId.get(id) ?? null)
 	})
+	const saves = subs
+		.map((sub) => sub.CurrentSave)
+		.filter((save): save is SubRoomDataSave => typeof save === 'object' && save !== null)
+	await attachStudioUnityAssets(db, saves)
+}
+
+/**
+ * Fill `UnitySubAssets` on saves that point at a stored Studio build. Maker-pen
+ * saves have no `UnityAssetId` and are left untouched, including their empty
+ * arrays. A missing studio table is the same answer: the scene blob still loads,
+ * and the bundle list stays empty until the migration exists.
+ *
+ * Only main bundles are listed. Stripped bundles stay in the bucket.
+ */
+export async function attachStudioUnityAssets(
+	db: D1Database,
+	saves: SubRoomDataSave[]
+): Promise<void> {
+	const ids = [
+		...new Set(
+			saves
+				.map((save) => save.UnityAssetId)
+				.filter((id): id is string => typeof id === 'string' && id !== '')
+		),
+	]
+	if (ids.length === 0) return
+	let files: StudioUnityAssetFile[]
+	try {
+		files = await listStudioUnityAssetFiles(db, ids)
+	} catch (err) {
+		if (isMissingStudioAssetTable(err)) return
+		throw err
+	}
+	const byAsset = new Map<string, StudioUnityAssetFile[]>()
+	for (const file of files) {
+		const list = byAsset.get(file.unityAssetId) ?? []
+		list.push(file)
+		byAsset.set(file.unityAssetId, list)
+	}
+	for (const save of saves) {
+		const id = save.UnityAssetId
+		if (typeof id !== 'string') continue
+		const baked = bakedStudioUnityAssets(byAsset.get(id) ?? [])
+		if (baked.length === 0) continue
+		save.UnitySubAssets = baked
+	}
 }
 
 // ---- Room tags ------------------------------------------------------------
@@ -2466,7 +2521,9 @@ export async function getSubRoomSaves(
 		)
 		.bind(subRoomId)
 		.all<SubRoomSaveRow>()
-	return results.map(parseSubRoomSaveRow)
+	const saves = results.map(parseSubRoomSaveRow)
+	await attachStudioUnityAssets(db, saves)
+	return saves
 }
 
 /**
@@ -2485,7 +2542,10 @@ export async function getSubRoomSaveById(
 		)
 		.bind(saveId, subRoomId)
 		.first<SubRoomSaveRow>()
-	return row ? parseSubRoomSaveRow(row) : null
+	if (!row) return null
+	const save = parseSubRoomSaveRow(row)
+	await attachStudioUnityAssets(db, [save])
+	return save
 }
 
 // ---- Subroom permissions --------------------------------------------------
