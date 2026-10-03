@@ -1293,6 +1293,7 @@ function StaffPlayerActions({ account, navigate }: { account: PublicAccount; nav
 	const itemGift = useAction()
 	const usernameChange = useAction()
 	const clearPassword = useAction()
+	const grantPlus = useAction()
 	const base = `/api/staff/players/${account.accountId}`
 
 	return (
@@ -1460,6 +1461,26 @@ function StaffPlayerActions({ account, navigate }: { account: PublicAccount; nav
 				>
 					{usernameChange.pending ? 'Adding…' : 'Add username change'}
 				</button>
+				{/* Developer-only, like the gifts; www refuses it to moderators. */}
+				{isDeveloper() && (
+					<button
+						type="submit"
+						disabled={grantPlus.pending}
+						onClick={() =>
+							void grantPlus.run(async () => {
+								const res = await call<{ hadPlus: boolean }>(`${base}/grant-plus`, {
+									authed: true,
+									method: 'POST',
+								})
+								return res.hadPlus
+									? `@${account.username} already has Plus.`
+									: `@${account.username} now has Plus. It takes effect the next time they sign in.`
+							})
+						}
+					>
+						{grantPlus.pending ? 'Granting…' : 'Grant Plus'}
+					</button>
+				)}
 				{confirmingClear ? (
 					<>
 						<button
@@ -1511,6 +1532,8 @@ function StaffPlayerActions({ account, navigate }: { account: PublicAccount; nav
 			{usernameChange.done && <p className="ok">{usernameChange.done}</p>}
 			{clearPassword.error && <p className="error">{clearPassword.error}</p>}
 			{clearPassword.done && <p className="ok">{clearPassword.done}</p>}
+			{grantPlus.error && <p className="error">{grantPlus.error}</p>}
+			{grantPlus.done && <p className="ok">{grantPlus.done}</p>}
 		</section>
 	)
 }

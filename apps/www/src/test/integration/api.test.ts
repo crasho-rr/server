@@ -872,6 +872,7 @@ it('refuses every staff endpoint without a token, and without a staff role', asy
 		'/api/staff/players/1/username-changes',
 		'/api/staff/players/1/clear-password',
 		'/api/staff/studio-access',
+		'/api/staff/players/1/grant-plus',
 	]
 	writes.push(
 		'/api/staff/rooms/1/gift-tokens',
@@ -887,8 +888,8 @@ it('refuses every staff endpoint without a token, and without a staff role', asy
 		expect(res.status).toBe(403)
 	}
 
-	// The gifts are narrower: a moderator is staff, but not a developer.
-	for (const path of writes.filter((p) => p.includes('/gift-'))) {
+	// The gifts and the Plus grant are narrower: a moderator is staff, but not a developer.
+	for (const path of writes.filter((p) => p.includes('/gift-') || p.includes('/grant-plus'))) {
 		expect((await staffPost(path, 8101, { amount: 1 })).status).toBe(403)
 	}
 
@@ -1985,6 +1986,38 @@ it('clears a player’s password so they can set a new one in game', async () =>
 		{ actor: 8110, data: { playerId: 8320, hadPassword: false } },
 	])
 	expect((await staffPost('/api/staff/players/8397/clear-password', 8110, {})).status).toBe(404)
+})
+
+it('grants a player Plus, developers only', async () => {
+	await updateAccount(env.DB, 8330, { username: 'Plusless' })
+	const hasPlus = async () =>
+		await env.DB.prepare(
+			"SELECT json_extract(data, '$.hasPlus') AS plus, json_extract(data, '$.username') AS username FROM account WHERE account_id = 8330"
+		).first<{ plus: number | null; username: string }>()
+
+	// A moderator is staff but not a developer: refused, and nothing is written.
+	expect((await staffPost('/api/staff/players/8330/grant-plus', 8101, {})).status).toBe(403)
+	expect(await hasPlus()).toEqual({ plus: null, username: 'Plusless' })
+
+	let res = await devPost('/api/staff/players/8330/grant-plus', 8110, {})
+	expect(res.status).toBe(200)
+	expect(await res.json()).toEqual({ playerId: 8330, hasPlus: true, hadPlus: false })
+	// Only the flag is set: the rest of the account is untouched.
+	expect(await hasPlus()).toEqual({ plus: 1, username: 'Plusless' })
+
+	// Granting it again is harmless, and says they already had it.
+	res = await devPost('/api/staff/players/8330/grant-plus', 8110, {})
+	expect(await res.json()).toEqual({ playerId: 8330, hasPlus: true, hadPlus: true })
+
+	expect(await auditRows('grant_plus', 8330)).toEqual([
+		{ actor: 8110, data: { playerId: 8330, hadPlus: false } },
+		{ actor: 8110, data: { playerId: 8330, hadPlus: true } },
+	])
+	// An unknown player is a 404, and no account is conjured for them.
+	expect((await devPost('/api/staff/players/8396/grant-plus', 8110, {})).status).toBe(404)
+	expect(
+		await env.DB.prepare('SELECT 1 AS hit FROM account WHERE account_id = 8396').first()
+	).toBeNull()
 })
 
 /** A custom avatar item made by `creatorAccountId`; published unless `accessibility` says. */
