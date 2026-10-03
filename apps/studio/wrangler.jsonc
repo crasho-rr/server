@@ -4,6 +4,17 @@
 	"main": "src/studio.app.ts",
 	"compatibility_date": "2026-06-16",
 	"compatibility_flags": ["nodejs_compat"],
+	// Shared `recflare` D1. Read-only: room co-owners come off the `room` blob and
+	// who is in a subroom comes off `presence`. Both tables are owned and migrated
+	// by other workers, so there is no migrations_dir here. The "local" placeholder
+	// is replaced with RECFLARE_D1 at deploy time.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "recflare",
+			"database_id": "local"
+		}
+	],
 	// Shared Secrets Store holding the HS256 JWT signing key. Every worker binds the
 	// same store as JWT_SECRET so tokens signed by `auth` verify here. The "local"
 	// store_id placeholder is replaced with RECFLARE_SECRETS_STORE at deploy time.

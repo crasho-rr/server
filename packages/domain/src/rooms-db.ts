@@ -294,6 +294,31 @@ export async function canManageRoomById(
 }
 
 /**
+ * Account ids that co-own a room: its creator, and every `Roles` entry at Creator or
+ * CoOwner. Null when the room does not exist. A pending invite is not a co-owner yet
+ * (`Role` stays None until they accept), and Host / Moderator are not in this set —
+ * the same ownership set as {@link canManageRoom}. Ordered by account id.
+ *
+ * Reads the blob only, like {@link canManageRoomById}.
+ */
+export async function getRoomCoOwnerIds(db: D1Database, roomId: number): Promise<number[] | null> {
+	const room = parseOne(
+		await db
+			.prepare(`SELECT ${ROOM_COLUMNS} FROM room WHERE room_id = ?1`)
+			.bind(roomId)
+			.first<RoomRow>()
+	)
+	if (!room) return null
+	const ids = new Set<number>()
+	const creator = Number(room.CreatorAccountId)
+	if (Number.isSafeInteger(creator) && creator > 0) ids.add(creator)
+	for (const role of roomRoles(room)) {
+		if (role.AccountId > 0 && MANAGE_ROLES.has(role.Role)) ids.add(role.AccountId)
+	}
+	return [...ids].sort((a, b) => a - b)
+}
+
+/**
  * Whether an account may MODERATE a room — its creator, or the holder of a role at
  * Moderator (20) or above. The wider gate that {@link canManageRoom} is the narrow one
  * of: a moderator polices who is in the room right now (kicking someone out of an

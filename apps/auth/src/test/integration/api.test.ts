@@ -11,8 +11,11 @@ import {
 	hashPassword,
 	PRESENCE_SCHEMA_DDL,
 	ROOM_SCHEMA_DDL,
+	grantStudioBetaAccess,
+	revokeStudioBetaAccess,
 	SCHEMA_DDL,
 	seedRoomWithSubRooms,
+	STUDIO_BETA_ACCESS_SCHEMA_DDL,
 	SUBROOM_SCHEMA_DDL,
 } from '@repo/domain'
 import { TOKEN_TTL_SECONDS } from '@repo/jwt'
@@ -98,6 +101,9 @@ beforeAll(async () => {
 	// the token grant reads it for the evasion arms.
 	for (const stmt of REPORTS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	for (const stmt of STUDIO_DEVICE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
+	// Studio upload whitelist. Auth reads it on every token, so a missing table
+	// fails the grant rather than quietly omitting betastudio.
+	for (const stmt of STUDIO_BETA_ACCESS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 })
 
 /**
@@ -683,6 +689,8 @@ describe('auth worker routes', () => {
 		expect(payload.role).not.toContain('developer')
 		expect(payload.role).not.toContain('moderator')
 		expect(payload.role).not.toContain('junior')
+		// Studio upload access is a whitelist, not a default role.
+		expect(payload.role).not.toContain('betastudio')
 		// No privileges to carry, so the claim is absent rather than an empty array.
 		expect(payload['rn.privilege']).toBeUndefined()
 		// Same for Plus: omitted rather than `false`, so a non-subscriber's token is
@@ -724,6 +732,90 @@ describe('auth worker routes', () => {
 			.run()
 		const payload = await tokenFor(`account_id=91&password=${LOGIN_PASSWORD}`)
 		expect(payload.role).toEqual(expect.arrayContaining(['gameClient', 'developer', 'moderator']))
+		// developer is a different grant. It does not put this account on the studio list.
+		expect(payload.role).not.toContain('betastudio')
+	})
+
+	// RecFlare Studio treats the role claim `betastudio` as permission to upload.
+	// It is stamped from studio_beta_access on every mint path — password, refresh,
+	// and the Studio device grant — and a refresh after a revoke drops it. A token
+	// that kept the role for the rest of the day would leave a removed player uploading.
+	test('POST /connect/token stamps betastudio only while the account is whitelisted', async () => {
+		await seedAccount(9601, 'StudioPlayer')
+		expect((await tokenFor(`account_id=9601&password=${LOGIN_PASSWORD}`)).role).not.toContain(
+			'betastudio'
+		)
+
+		expect(await grantStudioBetaAccess(env.DB, 9601, 1)).toBe(true)
+		// A repeat grant does not move the original row.
+		expect(await grantStudioBetaAccess(env.DB, 9601, 42)).toBe(false)
+		expect((await tokenFor(`account_id=9601&password=${LOGIN_PASSWORD}`)).role).toEqual([
+			'gameClient',
+			'screenshare',
+			'betastudio',
+		])
+
+		// developer and moderator stay in front of betastudio, so the claim order is stable.
+		await env.DB.prepare('INSERT OR IGNORE INTO account (data) VALUES (?1)')
+			.bind(
+				JSON.stringify({
+					accountId: 9602,
+					username: 'StudioStaff',
+					passwordHash: await hashPassword(LOGIN_PASSWORD),
+					isDeveloper: true,
+					isModerator: true,
+				})
+			)
+			.run()
+		await grantStudioBetaAccess(env.DB, 9602, 1)
+		expect((await tokenFor(`account_id=9602&password=${LOGIN_PASSWORD}`)).role).toEqual([
+			'gameClient',
+			'screenshare',
+			'developer',
+			'moderator',
+			'betastudio',
+		])
+
+		const client = `client_id=${STUDIO_CLIENT_ID}&client_secret=${STUDIO_CLIENT_SECRET}`
+		const started = await exports.default.fetch(`${ORIGIN}/connect/deviceauthorization`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: client,
+		})
+		expect(started.status).toBe(200)
+		const codes = (await started.json()) as { device_code: string; user_code: string }
+		const session = await postToken(
+			`grant_type=password&username=StudioPlayer&password=${LOGIN_PASSWORD}`
+		)
+		expect(session.status).toBe(200)
+		const approved = await exports.default.fetch(`${ORIGIN}/connect/device/approve`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				Authorization: `Bearer ${session.json.access_token}`,
+			},
+			body: `user_code=${codes.user_code}`,
+		})
+		expect(approved.status).toBe(200)
+		const signedIn = await postToken(
+			`${client}&grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:device_code')}&device_code=${codes.device_code}`
+		)
+		expect(signedIn.status).toBe(200)
+		expect(decodePayload(signedIn.json.access_token as string).role).toEqual([
+			'gameClient',
+			'screenshare',
+			'betastudio',
+		])
+
+		// Revoke between issue and refresh. The refresh re-reads the whitelist.
+		const login = await postToken(`account_id=9601&password=${LOGIN_PASSWORD}`)
+		await revokeStudioBetaAccess(env.DB, 9601)
+		await revokeStudioBetaAccess(env.DB, 9602)
+		const refreshed = await postToken(
+			`grant_type=refresh_token&refresh_token=${encodeURIComponent(login.json.refresh_token as string)}`
+		)
+		expect(refreshed.status).toBe(200)
+		expect(decodePayload(refreshed.json.access_token as string).role).not.toContain('betastudio')
 	})
 
 	// Rec Room Plus rides on the token as `rn.plus`, stamped from `account.hasPlus` — which
@@ -1705,7 +1797,10 @@ describe('auth worker routes', () => {
 		expect(typeof signedIn.json.access_token).toBe('string')
 		expect(signedIn.json.expires_in).toBe(TOKEN_TTL_SECONDS)
 		// Studio treats expires_in as seconds, same as the game client.
-		expect(decodePayload(signedIn.json.access_token as string).sub).toBe('42')
+		const devicePayload = decodePayload(signedIn.json.access_token as string)
+		expect(devicePayload.sub).toBe('42')
+		// Player42 is not on the studio whitelist, so a Studio login is still Limited.
+		expect(devicePayload.role).not.toContain('betastudio')
 
 		const again = await postToken(
 			`${client}&grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:device_code')}&device_code=${codes.device_code}`

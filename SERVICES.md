@@ -54,7 +54,7 @@ apex/`ns` host and isn't listed within it. Each implemented worker has its own
 | Storage               | `storage`               | —                       | Room uploader                                                         |
 | Strings               | `strings`               | —                       | Not yet implemented                                                   |
 | StringsCDN            | `strings-cdn`           | —                       | Not yet implemented                                                   |
-| Studio                | `studio`                | `studio`                | Stub — `GET /cloud-builds/for-room` returns an empty page. Device login stays on **Auth**; `GET /account/me` stays on **Accounts**; the approval page is **WWW** `/device` |
+| Studio                | `studio`                | `studio`                | `GET /cloud-builds/for-room` returns an empty page. `GET /collaboration/owners-in-room` lists co-owners whose presence is in that room and subroom. Device login stays on **Auth**; `GET /account/me` stays on **Accounts**; the approval page is **WWW** `/device` |
 | Thorn                 | `thorn`                 | —                       | Not yet implemented                                                   |
 | Videos                | `videos`                | —                       | Not yet implemented                                                   |
 | WWW                   | `www`                   | `www`                   | Website, including the Studio sign-in page at `/device`              |

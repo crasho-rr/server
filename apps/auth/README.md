@@ -62,6 +62,12 @@ Access tokens live for 1 hour (`TOKEN_TTL_SECONDS` in `@repo/jwt`) and carry a `
 claim, so developer/moderator powers refresh on every login and every refresh grant.
 Grant those flags with `runx admin grant-developer` / `grant-moderator`.
 
+`betastudio` is a separate claim. RecFlare Studio treats it as permission to upload,
+and developer does not include it. It is stamped only for accounts on
+`studio_beta_access`. Staff add and remove people at `/settings/recroomstudio` on
+the website. A player already signed into Studio keeps the old token until the next
+sign-in or refresh.
+
 ### Verifiable platforms: Steam and Meta
 
 Only an identity we can _prove_ is ever bound to an account, so any grant that
@@ -131,7 +137,7 @@ small private server, or when a shared network is being locked out.
 
 | Binding              | Type          | Notes                                                                                           |
 | -------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
-| `DB`                 | D1            | Shared `recflare` database; this worker owns `account`, `refresh_tokens` and `platform_account` |
+| `DB`                 | D1            | Shared `recflare` database. Owns `account`, `refresh_tokens`, `platform_account`, `studio_beta_access` |
 | `JWT_SECRET`         | Secrets Store | Shared HS256 signing key                                                                        |
 | `META_APP_SECRET`    | Secrets Store | Meta app secret; only used to validate a login nonce                                            |
 | `MAX_ACCOUNTS_PER_*` | vars          | Optional signup caps; read via `intVar`                                                         |

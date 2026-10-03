@@ -8,6 +8,11 @@ export type Env = SharedHonoEnv & {
 	 * `auth` verify here.
 	 */
 	JWT_SECRET: SecretsStoreSecret
+	// Shared `recflare` D1. Read-only here: room ownership lives in the `room` blob
+	// (the `rooms` worker owns that schema) and who is standing where lives in
+	// `presence` (the `match` worker writes it, the `rooms` worker migrates it).
+	// No migrations_dir — this worker does not own a table.
+	DB: D1Database
 }
 
 /** Variables can be extended */
