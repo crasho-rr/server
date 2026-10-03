@@ -408,18 +408,15 @@ const app = new Hono<App>()
 			if (!head) return c.notFound()
 			const headers = new Headers()
 			head.writeHttpMetadata(headers)
+			// workerd omits Content-Length on a null body when Content-Type is set.
+			// The editor only checks this status. The length is the R2 object size.
+			headers.delete('content-type')
+			headers.delete('content-encoding')
 			headers.set('etag', head.httpEtag)
-			headers.set('content-type', 'application/octet-stream')
 			headers.set('accept-ranges', 'bytes')
 			headers.set('cache-control', CACHE_CONTROL)
 			headers.set('content-length', String(head.size))
-			// CORS writes to `c.res` before the handler runs, so Hono rebuilds this
-			// response with `new Response(body, res)`. That rebuild drops
-			// Content-Length on a null body once Content-Type is set. The headers
-			// already on `c.res` are copied back afterwards, which is the set that
-			// sticks.
-			c.header('content-length', String(head.size))
-			return new Response(null, { status: 200, headers })
+			return new Response(null, { status: 200, headers, encodeBody: 'manual' })
 		}
 	)
 
