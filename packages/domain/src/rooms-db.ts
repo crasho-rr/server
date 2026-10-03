@@ -2922,6 +2922,10 @@ export async function getFavoritedRooms(
  * most recent first. Like favorites, it joins `interaction` to `rooms`, so a
  * visited room no longer in D1 is simply absent. Paginated via skip/take; returns
  * a bare array of rooms (the client's room-source loaders expect a plain list).
+ *
+ * This is the player's OWN history, so nothing is filtered on accessibility: their
+ * unpublished builds and the private rooms they were invited into are theirs to see.
+ * Anyone else reading it goes through {@link getPublicVisitedRooms}.
  */
 export async function getVisitedRooms(
 	db: D1Database,
@@ -2929,17 +2933,52 @@ export async function getVisitedRooms(
 	skip: number,
 	take: number
 ): Promise<Room[]> {
+	return visitedRooms(db, playerId, skip, take, false)
+}
+
+/**
+ * {@link getVisitedRooms} as SOMEONE ELSE sees it — a profile, which anyone can look at —
+ * narrowed to the rooms that are {@link isListable}. A visit is recorded wherever the
+ * player goes, so the unfiltered history names their unpublished builds and the private
+ * rooms they were invited into; served whole, it leaked a room its owner hasn't released,
+ * and `GET /rooms/{id}` is not gated, so the id alone was enough to open it. The same test
+ * the public `ownedby/{accountId}` profile list applies, so a room that opted out of lists
+ * stays off this one too. Paginated AFTER the filter, so a page is a page of what the
+ * viewer may see rather than a page with holes in it.
+ */
+export async function getPublicVisitedRooms(
+	db: D1Database,
+	playerId: number,
+	skip: number,
+	take: number
+): Promise<Room[]> {
+	return visitedRooms(db, playerId, skip, take, true)
+}
+
+async function visitedRooms(
+	db: D1Database,
+	playerId: number,
+	skip: number,
+	take: number,
+	listableOnly: boolean
+): Promise<Room[]> {
+	// The listable predicate is pushed down (see LISTABLE_WHERE) so the blobs of the
+	// rooms a friend may not see never leave D1; the in-memory filter remains the
+	// definition, as everywhere else it is used.
 	const { results } = await db
 		.prepare(
 			`SELECT r.data AS data, r.visits AS visits
 			 FROM interaction i
 			 JOIN room r ON r.room_id = i.room_id
 			 WHERE i.player_id = ?1 AND i.last_visited_at IS NOT NULL
+			 ${listableOnly ? `AND r.${LISTABLE_WHERE.replaceAll(' AND ', ' AND r.')}` : ''}
 			 ORDER BY i.last_visited_at DESC`
 		)
 		.bind(playerId)
 		.all<RoomRow>()
-	return hydrateRooms(db, parseAll(results).slice(skip, skip + take))
+	const rooms = parseAll(results)
+	const visible = listableOnly ? rooms.filter(isListable) : rooms
+	return hydrateRooms(db, visible.slice(skip, skip + take))
 }
 
 /** A player's interaction state with a room. */
