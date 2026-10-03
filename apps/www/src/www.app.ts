@@ -48,6 +48,7 @@ import {
 	getReportHandler,
 	giftItemHandler,
 	giftOnlineTokensHandler,
+	giftRoleTokensHandler,
 	giftRoomTokensHandler,
 	giftTokensHandler,
 	giftXpHandler,
@@ -567,6 +568,9 @@ const app = new Hono<App>()
 	.post('/api/staff/rooms/:roomId/gift-tokens', requireDeveloper, giftRoomTokensHandler)
 	// The account page's token drop: the same gift to everyone online at once.
 	.post('/api/staff/online/gift-tokens', requireDeveloper, giftOnlineTokensHandler)
+	// Its sibling: the same gift to every account whose Discord link holds a role, offline
+	// included — the supporter cron's audience, with an operator's amount and message.
+	.post('/api/staff/discord-roles/:roleId/gift-tokens', requireDeveloper, giftRoleTokensHandler)
 	.post('/api/staff/players/:id/username-changes', addUsernameChangeHandler)
 	.post('/api/staff/players/:id/clear-password', clearPasswordHandler)
 	// RecFlare Studio upload access. The same staff gate as moderation: a moderator
