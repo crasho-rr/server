@@ -741,15 +741,17 @@ describe('auth worker routes', () => {
 	// and the Studio device grant — and a refresh after a revoke drops it. A token
 	// that kept the role for the rest of the day would leave a removed player uploading.
 	test('POST /connect/token stamps betastudio only while the account is whitelisted', async () => {
-		await seedAccount(9601, 'StudioPlayer')
-		expect((await tokenFor(`account_id=9601&password=${LOGIN_PASSWORD}`)).role).not.toContain(
+		// 9811/9812, not 9601–9605: those ids belong to the staff-login audit tests,
+		// which insert with OR IGNORE and then count `staff_login` rows.
+		await seedAccount(9811, 'StudioPlayer')
+		expect((await tokenFor(`account_id=9811&password=${LOGIN_PASSWORD}`)).role).not.toContain(
 			'betastudio'
 		)
 
-		expect(await grantStudioBetaAccess(env.DB, 9601, 1)).toBe(true)
+		expect(await grantStudioBetaAccess(env.DB, 9811, 1)).toBe(true)
 		// A repeat grant does not move the original row.
-		expect(await grantStudioBetaAccess(env.DB, 9601, 42)).toBe(false)
-		expect((await tokenFor(`account_id=9601&password=${LOGIN_PASSWORD}`)).role).toEqual([
+		expect(await grantStudioBetaAccess(env.DB, 9811, 42)).toBe(false)
+		expect((await tokenFor(`account_id=9811&password=${LOGIN_PASSWORD}`)).role).toEqual([
 			'gameClient',
 			'screenshare',
 			'betastudio',
@@ -759,7 +761,7 @@ describe('auth worker routes', () => {
 		await env.DB.prepare('INSERT OR IGNORE INTO account (data) VALUES (?1)')
 			.bind(
 				JSON.stringify({
-					accountId: 9602,
+					accountId: 9812,
 					username: 'StudioStaff',
 					passwordHash: await hashPassword(LOGIN_PASSWORD),
 					isDeveloper: true,
@@ -767,8 +769,8 @@ describe('auth worker routes', () => {
 				})
 			)
 			.run()
-		await grantStudioBetaAccess(env.DB, 9602, 1)
-		expect((await tokenFor(`account_id=9602&password=${LOGIN_PASSWORD}`)).role).toEqual([
+		await grantStudioBetaAccess(env.DB, 9812, 1)
+		expect((await tokenFor(`account_id=9812&password=${LOGIN_PASSWORD}`)).role).toEqual([
 			'gameClient',
 			'screenshare',
 			'developer',
@@ -808,9 +810,9 @@ describe('auth worker routes', () => {
 		])
 
 		// Revoke between issue and refresh. The refresh re-reads the whitelist.
-		const login = await postToken(`account_id=9601&password=${LOGIN_PASSWORD}`)
-		await revokeStudioBetaAccess(env.DB, 9601)
-		await revokeStudioBetaAccess(env.DB, 9602)
+		const login = await postToken(`account_id=9811&password=${LOGIN_PASSWORD}`)
+		await revokeStudioBetaAccess(env.DB, 9811)
+		await revokeStudioBetaAccess(env.DB, 9812)
 		const refreshed = await postToken(
 			`grant_type=refresh_token&refresh_token=${encodeURIComponent(login.json.refresh_token as string)}`
 		)

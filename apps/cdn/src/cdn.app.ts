@@ -413,7 +413,9 @@ const app = new Hono<App>()
 			headers.set('accept-ranges', 'bytes')
 			headers.set('cache-control', CACHE_CONTROL)
 			headers.set('content-length', String(head.size))
-			return new Response(null, { status: 200, headers })
+			// A null body plus Content-Type makes workerd drop Content-Length unless
+			// encoding is manual. HEAD has no bytes; the length is the object's size.
+			return new Response(null, { status: 200, headers, encodeBody: 'manual' })
 		}
 	)
 
