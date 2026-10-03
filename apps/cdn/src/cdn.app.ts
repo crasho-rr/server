@@ -413,9 +413,13 @@ const app = new Hono<App>()
 			headers.set('accept-ranges', 'bytes')
 			headers.set('cache-control', CACHE_CONTROL)
 			headers.set('content-length', String(head.size))
-			// A null body plus Content-Type makes workerd drop Content-Length unless
-			// encoding is manual. HEAD has no bytes; the length is the object's size.
-			return new Response(null, { status: 200, headers, encodeBody: 'manual' })
+			// CORS writes to `c.res` before the handler runs, so Hono rebuilds this
+			// response with `new Response(body, res)`. That rebuild drops
+			// Content-Length on a null body once Content-Type is set. The headers
+			// already on `c.res` are copied back afterwards, which is the set that
+			// sticks.
+			c.header('content-length', String(head.size))
+			return new Response(null, { status: 200, headers })
 		}
 	)
 
