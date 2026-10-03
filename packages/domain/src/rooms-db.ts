@@ -859,6 +859,47 @@ export async function setRoomImage(
 }
 
 /**
+ * Stamp `BecameRRStudioRoomAt` the first time a Rec Room Studio build is stored for
+ * this room. A room that already carries a timestamp keeps it: a later local build
+ * is another cloud build, not a new moment of becoming a Studio room. A missing key
+ * and a JSON null both count as unset (`json_type` is not `text`).
+ */
+export async function markRoomAsRecRoomStudio(
+	db: D1Database,
+	roomId: number,
+	at: string
+): Promise<void> {
+	await db
+		.prepare(
+			`UPDATE room SET data = json_set(data, '$.BecameRRStudioRoomAt', ?2)
+			 WHERE room_id = ?1 AND json_type(data, '$.BecameRRStudioRoomAt') IS NOT 'text'`
+		)
+		.bind(roomId, at)
+		.run()
+}
+
+/**
+ * Point one existing subroom save at a baked Unity asset, in place. Local Studio
+ * builds attach to the save the room is already published from; they do not append
+ * a new save row. Returns false when that save id is not this subroom's.
+ */
+export async function setSubRoomSaveUnityAssetId(
+	db: D1Database,
+	subRoomId: number,
+	saveId: number,
+	unityAssetId: string
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE subroom_save SET data = json_set(data, '$.UnityAssetId', ?3)
+			 WHERE sub_room_data_save_id = ?1 AND sub_room_id = ?2`
+		)
+		.bind(saveId, subRoomId, unityAssetId)
+		.run()
+	return (result.meta.changes ?? 0) > 0
+}
+
+/**
  * Merge a set of top-level fields into a room's JSON blob and write it back. Used by
  * the room-settings mutations whose values include booleans (cloning, platform
  * restrictions) — rewriting the whole blob preserves proper JSON booleans, whereas a

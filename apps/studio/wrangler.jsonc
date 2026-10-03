@@ -4,15 +4,25 @@
 	"main": "src/studio.app.ts",
 	"compatibility_date": "2026-06-16",
 	"compatibility_flags": ["nodejs_compat"],
-	// Shared `recflare` D1. Read-only: room co-owners come off the `room` blob and
-	// who is in a subroom comes off `presence`. Both tables are owned and migrated
-	// by other workers, so there is no migrations_dir here. The "local" placeholder
-	// is replaced with RECFLARE_D1 at deploy time.
+	// Shared `recflare` D1. Room co-owners come off the `room` blob and who is in a
+	// subroom comes off `presence` (other workers own those tables). This worker
+	// owns the cloud-build tables, migrated from `migrations/`. The "local"
+	// placeholder is replaced with RECFLARE_D1 at deploy time.
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "recflare",
-			"database_id": "local"
+			"database_id": "local",
+			"migrations_dir": "migrations"
+		}
+	],
+	// Shared `recflare-cdn` R2 bucket (also bound by `rooms` / `cdn` / `storage`).
+	// Local Studio asset bundles live here under `studio-room-bundles/`.
+	// bucket_name is a literal, so nothing is spliced at deploy time.
+	"r2_buckets": [
+		{
+			"binding": "CDN_ASSETS",
+			"bucket_name": "recflare-cdn"
 		}
 	],
 	// Shared Secrets Store holding the HS256 JWT signing key. Every worker binds the
