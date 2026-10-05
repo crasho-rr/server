@@ -1383,8 +1383,15 @@ export interface SaveSubRoomDataInput {
 	subRoomDataFilename?: string
 	/** `SubRoomData.Hash` — echoed back as the save response's `dataBlobHash`. */
 	subRoomDataHash?: string
-	/** Uploaded blob key for the room-level METADATA blob (a separate upload). */
+	/**
+	 * `RoomData.Filename` — the uploaded ROOM-level metadata blob (a separate upload from the
+	 * scene). It lands on the ROOM as `DataBlob`, not on the subroom: the client's `Room` has
+	 * `DataBlob`/`DataBlobHash` and its `SubRoom` has no field for it (`RoomDataBlob`, where
+	 * this once went, is not a key the client knows, and it dropped it silently).
+	 */
 	roomDataFilename?: string
+	/** `RoomData.Hash` — stored beside it as the room's `DataBlobHash`; null when unsent. */
+	roomDataHash?: string
 	/**
 	 * The save comment — a description of THIS revision, typed into the client's save box.
 	 * It belongs to the save (and shows up in the `…/saves` history); it is not the room's
@@ -1718,18 +1725,35 @@ export async function saveSubRoomData(
 		})
 	)
 	const saveId = Number(save.SubRoomDataSaveId)
-	if (input.roomDataFilename) sub.RoomDataBlob = input.roomDataFilename
 	sub.DataSavedAt = new Date().toISOString()
 	if (input.persistenceVersion !== undefined) sub.PersistenceVersion = input.persistenceVersion
 	if (input.inventionUsage !== undefined) sub.InventionUsage = input.inventionUsage
 
-	// Nothing here touches the ROOM. A room save is a revision of one SUBROOM, and every
-	// field it carries describes that revision: `Description` is the save comment shown in
-	// the `…/saves` history, `PersistenceVersion` and `InventionUsage` describe the scene
-	// just saved. They used to be copied onto the room as well, which meant each save
-	// silently replaced the room's public description with the save comment. The room's own
-	// fields are edited through their own routes (`PUT /rooms/:id/description` and
-	// friends), so the room row is not rewritten here at all.
+	// The ONE thing a save writes on the ROOM: `RoomData`, the room-level metadata blob the
+	// client uploads beside the scene. The client's `Room` reads it as `DataBlob` (with
+	// `DataBlobHash`), so that is where it goes — a targeted `json_set` of those two keys,
+	// never a rewrite of the room row. It used to be put on the subroom as `RoomDataBlob`,
+	// which the client has no field for, so no save ever reached it.
+	//
+	// Everything else the save carries describes the SUBROOM's revision: `Description` is the
+	// save comment shown in the `…/saves` history, `PersistenceVersion` and `InventionUsage`
+	// describe the scene just saved. They used to be copied onto the room as well, which
+	// meant each save silently replaced the room's public description with the save comment.
+	// The room's own fields are edited through their own routes (`PUT /rooms/:id/description`
+	// and friends).
+	const roomWrites: D1PreparedStatement[] = []
+	if (input.roomDataFilename) {
+		const hash = input.roomDataHash ?? null
+		room.DataBlob = input.roomDataFilename
+		room.DataBlobHash = hash
+		roomWrites.push(
+			db
+				.prepare(
+					"UPDATE room SET data = json_set(data, '$.DataBlob', ?2, '$.DataBlobHash', ?3) WHERE room_id = ?1"
+				)
+				.bind(roomId, input.roomDataFilename, hash)
+		)
+	}
 
 	// Publish outright when the client asked to (`AutoPublish`), or for a dorm — a dorm is
 	// the player's own private space with no publish step in the client, so staging one
@@ -1737,6 +1761,7 @@ export async function saveSubRoomData(
 	// `publish_save`. One round trip for the rest of the save.
 	const publishNow = input.autoPublish === true || room.IsDorm === true
 	await db.batch([
+		...roomWrites,
 		publishNow
 			? db
 					.prepare(

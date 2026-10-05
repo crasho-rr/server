@@ -2940,13 +2940,14 @@ describe('econ endpoints', () => {
 		const currency = await createRoomCurrency(env.DB, {
 			RoomId: 93,
 			Name: 'Gems',
-			Description: '',
+			Description: 'Shiny',
 			Limit: 100,
 			Shape: 0,
 			Color: 0,
 		})
+		// The client names an offer by a GUID — not a label anyone should see.
 		const offer = await createPurchaseOffer(env.DB, currency.CurrencyId, {
-			Name: '100 gems',
+			Name: '5a1c3e4f-0000-4000-8000-000000000093',
 			CurrencyAmount: 100,
 			Price: 400,
 			Order: 0,
@@ -2982,8 +2983,9 @@ describe('econ endpoints', () => {
 			{
 				ItemType: 3,
 				ItemId: offer.CurrencyPurchaseOfferId,
-				Name: '100 gems',
-				Description: '',
+				// So a pack is labelled by what it is, and wears the currency's description.
+				Name: '100 Gems',
+				Description: 'Shiny',
 				ImageName: null,
 				RoomId: 93,
 				Price: 400,

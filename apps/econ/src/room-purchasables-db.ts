@@ -59,8 +59,10 @@ export interface RoomPurchasable {
  *    so `ModifiedAt` is its `CreatedAt`.
  *  - A consumable records only `ModifiedAt`, which stands as its `CreatedAt` too.
  *  - A purchase offer is a pack of the room's currency sold for TOKENS, so its
- *    `PurchaseCurrencyId` is null; it has no description or art of its own, and the one
- *    timestamp it keeps serves as both.
+ *    `PurchaseCurrencyId` is null, and the one timestamp it keeps serves as both. Its `Name`
+ *    is `<amount> <currency name>` ("444 Gems"), NOT the stored `Name`: the client names an
+ *    offer by a GUID when it creates one, and that is what the shop showed. It takes the
+ *    currency's description and coin art, having none of its own.
  */
 export async function getRoomPurchasables(
 	db: D1Database,
@@ -75,6 +77,7 @@ export async function getRoomPurchasables(
 		db,
 		currencies.map((currency) => currency.CurrencyId)
 	)
+	const currencyById = new Map(currencies.map((currency) => [currency.CurrencyId, currency]))
 
 	return [
 		...keys.map((key): RoomPurchasable => ({
@@ -101,19 +104,20 @@ export async function getRoomPurchasables(
 			CreatedAt: consumable.ModifiedAt,
 			ModifiedAt: consumable.ModifiedAt,
 		})),
-		...offers.flatMap((shop) =>
-			shop.PurchaseOffers.map((offer): RoomPurchasable => ({
+		...offers.flatMap((shop) => {
+			const currency = currencyById.get(shop.CurrencyId)
+			return shop.PurchaseOffers.map((offer): RoomPurchasable => ({
 				ItemType: ROOM_PURCHASABLE_TYPE.roomCurrencyItem,
 				ItemId: offer.CurrencyPurchaseOfferId,
-				Name: offer.Name,
-				Description: '',
-				ImageName: null,
+				Name: `${offer.CurrencyAmount} ${currency?.Name ?? ''}`.trim(),
+				Description: currency?.Description ?? '',
+				ImageName: currency?.ImageName ?? null,
 				RoomId: roomId,
 				Price: offer.Price,
 				PurchaseCurrencyId: null,
 				CreatedAt: offer.ModifiedAt,
 				ModifiedAt: offer.ModifiedAt,
 			}))
-		),
+		}),
 	]
 }

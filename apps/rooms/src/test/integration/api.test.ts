@@ -3555,9 +3555,19 @@ describe('rooms endpoints', () => {
 			(s) => s.SubRoomId === 2
 		)!
 		expect(savedSub).toMatchObject({
-			RoomDataBlob: '5c618c920f6247efb8327e327d0b4417',
 			CreatorAccountId: 1,
 			PersistenceVersion: 41,
+		})
+		// `RoomData` is the ROOM-level metadata blob: it lands on the room as `DataBlob`, which
+		// is where the client reads it — not on the subroom, which has no field for it.
+		expect(savedSub).not.toHaveProperty('RoomDataBlob')
+		expect(saved.value.room).toMatchObject({
+			DataBlob: '5c618c920f6247efb8327e327d0b4417',
+			DataBlobHash: null,
+		})
+		expect(await (await SELF.fetch(`${ORIGIN}/rooms/2`)).json()).toMatchObject({
+			DataBlob: '5c618c920f6247efb8327e327d0b4417',
+			DataBlobHash: null,
 		})
 		expect(savedSub.CurrentSave).toMatchObject({
 			DataBlob: 'a84167b16796452ab70ee8a6a5b1dc5f',
