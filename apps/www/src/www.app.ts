@@ -531,9 +531,9 @@ const app = new Hono<App>()
 		return c.json({ hasPlus: true, discordUsername: membership.username, tokensAwarded })
 	})
 
-	// Whether the signed-in account is on the studio upload whitelist. The page
+	// Whether the signed-in account has studio upload access (`hasStudio`). The page
 	// Studio opens (`/settings/recroomstudio`) asks this; it does not list anyone
-	// else. Staff manage the list on the routes below.
+	// else. Staff manage the flag on the routes below.
 	.get('/api/studio-access', studioAccessStatusHandler)
 
 	// ---- Staff moderation panel ---------------------------------------------

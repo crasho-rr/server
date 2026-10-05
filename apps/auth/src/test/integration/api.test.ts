@@ -11,12 +11,10 @@ import {
 	hashPassword,
 	PRESENCE_SCHEMA_DDL,
 	ROOM_SCHEMA_DDL,
-	grantStudioBetaAccess,
-	revokeStudioBetaAccess,
 	SCHEMA_DDL,
 	seedRoomWithSubRooms,
-	STUDIO_BETA_ACCESS_SCHEMA_DDL,
 	SUBROOM_SCHEMA_DDL,
+	updateAccount,
 } from '@repo/domain'
 import { TOKEN_TTL_SECONDS } from '@repo/jwt'
 
@@ -101,9 +99,6 @@ beforeAll(async () => {
 	// the token grant reads it for the evasion arms.
 	for (const stmt of REPORTS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	for (const stmt of STUDIO_DEVICE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
-	// Studio upload whitelist. Auth reads it on every token, so a missing table
-	// fails the grant rather than quietly omitting betastudio.
-	for (const stmt of STUDIO_BETA_ACCESS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 })
 
 /**
@@ -732,15 +727,16 @@ describe('auth worker routes', () => {
 			.run()
 		const payload = await tokenFor(`account_id=91&password=${LOGIN_PASSWORD}`)
 		expect(payload.role).toEqual(expect.arrayContaining(['gameClient', 'developer', 'moderator']))
-		// developer is a different grant. It does not put this account on the studio list.
+		// developer is a different grant. It does not set the account's hasStudio flag.
 		expect(payload.role).not.toContain('betastudio')
 	})
 
 	// RecFlare Studio treats the role claim `betastudio` as permission to upload.
-	// It is stamped from studio_beta_access on every mint path — password, refresh,
-	// and the Studio device grant — and a refresh after a revoke drops it. A token
-	// that kept the role for the rest of the day would leave a removed player uploading.
-	test('POST /connect/token stamps betastudio only while the account is whitelisted', async () => {
+	// It is stamped from the account's hasStudio flag on every mint path — password,
+	// refresh, and the Studio device grant — and a refresh after a revoke drops it. A
+	// token that kept the role for the rest of the day would leave a removed player
+	// uploading.
+	test('POST /connect/token stamps betastudio only while the account has hasStudio', async () => {
 		// 9811/9812, not 9601–9605: those ids belong to the staff-login audit tests,
 		// which insert with OR IGNORE and then count `staff_login` rows.
 		await seedAccount(9811, 'StudioPlayer')
@@ -748,9 +744,7 @@ describe('auth worker routes', () => {
 			'betastudio'
 		)
 
-		expect(await grantStudioBetaAccess(env.DB, 9811, 1)).toBe(true)
-		// A repeat grant does not move the original row.
-		expect(await grantStudioBetaAccess(env.DB, 9811, 42)).toBe(false)
+		await updateAccount(env.DB, 9811, { hasStudio: true })
 		expect((await tokenFor(`account_id=9811&password=${LOGIN_PASSWORD}`)).role).toEqual([
 			'gameClient',
 			'screenshare',
@@ -766,10 +760,10 @@ describe('auth worker routes', () => {
 					passwordHash: await hashPassword(LOGIN_PASSWORD),
 					isDeveloper: true,
 					isModerator: true,
+					hasStudio: true,
 				})
 			)
 			.run()
-		await grantStudioBetaAccess(env.DB, 9812, 1)
 		expect((await tokenFor(`account_id=9812&password=${LOGIN_PASSWORD}`)).role).toEqual([
 			'gameClient',
 			'screenshare',
@@ -809,10 +803,10 @@ describe('auth worker routes', () => {
 			'betastudio',
 		])
 
-		// Revoke between issue and refresh. The refresh re-reads the whitelist.
+		// Revoke between issue and refresh. The refresh re-reads the account.
 		const login = await postToken(`account_id=9811&password=${LOGIN_PASSWORD}`)
-		await revokeStudioBetaAccess(env.DB, 9811)
-		await revokeStudioBetaAccess(env.DB, 9812)
+		await updateAccount(env.DB, 9811, { hasStudio: false })
+		await updateAccount(env.DB, 9812, { hasStudio: false })
 		const refreshed = await postToken(
 			`grant_type=refresh_token&refresh_token=${encodeURIComponent(login.json.refresh_token as string)}`
 		)
@@ -1801,7 +1795,7 @@ describe('auth worker routes', () => {
 		// Studio treats expires_in as seconds, same as the game client.
 		const devicePayload = decodePayload(signedIn.json.access_token as string)
 		expect(devicePayload.sub).toBe('42')
-		// Player42 is not on the studio whitelist, so a Studio login is still Limited.
+		// Player42 has no hasStudio flag, so a Studio login is still Limited.
 		expect(devicePayload.role).not.toContain('betastudio')
 
 		const again = await postToken(

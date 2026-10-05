@@ -27,7 +27,6 @@ import { ROOM_INSTANCE_SCHEMA_DDL } from '@repo/domain/src/room-instance-db'
 // a subroom — so those tables have to be here, as they are on the shared database.
 import { ROOM_SCHEMA_DDL, SUBROOM_SCHEMA_DDL } from '@repo/domain/src/rooms-db'
 import { recordStat, STAT_SCHEMA_DDL } from '@repo/domain/src/stats-db'
-import { STUDIO_BETA_ACCESS_SCHEMA_DDL } from '@repo/domain/src/studio-access-db'
 import { generateToken } from '@repo/jwt'
 
 import {
@@ -118,8 +117,6 @@ beforeAll(async () => {
 	for (const stmt of PRESENCE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	// `account` likewise: owned by `auth`, read and (for the benefits claim) written here.
 	for (const stmt of ACCOUNT_SCHEMA_DDL) await env.DB.prepare(stmt).run()
-	// Studio upload whitelist, owned by auth. The staff routes on this worker write it.
-	for (const stmt of STUDIO_BETA_ACCESS_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	// And `platform_account`, where a claimed Discord identity is linked.
 	for (const stmt of PLATFORM_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	// `report` and `warning` are owned (and migrated) by `api`; www serves the staff panel
@@ -2677,11 +2674,12 @@ it('decodes a bot member read: roles, gone, halt and error', async () => {
 	).resolves.toEqual({ kind: 'error', status: null })
 })
 
-// ---- Studio upload whitelist ------------------------------------------------
+// ---- Studio upload access ---------------------------------------------------
 //
 // RecFlare Studio treats the JWT role `betastudio` as permission to upload. Staff
-// manage who gets it here; auth stamps it onto the next login and the next refresh.
-// A signed-in player can ask about themselves. They cannot see or edit the list.
+// set the account's `hasStudio` flag here; auth stamps it onto the next login and
+// the next refresh. A signed-in player can ask about themselves. They cannot see or
+// edit the list.
 
 it('tells a signed-in player whether they can upload, and nobody else', async () => {
 	expect((await SELF.fetch('https://example.com/api/studio-access')).status).toBe(401)
@@ -2730,17 +2728,11 @@ it('lets staff add, list, and remove studio upload access', async () => {
 
 	const list = await staffGet('/api/staff/studio-access', 8110)
 	expect(list.status).toBe(200)
-	const body = (await list.json()) as {
-		accounts: Array<{ accountId: number; username: string | null; grantedBy: number }>
-	}
+	const body = (await list.json()) as { accounts: Array<{ accountId: number }> }
 	expect(body.accounts).toEqual([
-		expect.objectContaining({
-			accountId: 8601,
-			username: 'StudioFan',
-			grantedBy: 8110,
-			grantedByUsername: 'Moderator',
-		}),
+		{ accountId: 8601, username: 'StudioFan', displayName: expect.any(String) },
 	])
+	expect((await getAccount(env.DB, 8601))?.hasStudio).toBe(true)
 
 	expect((await staffDelete('/api/staff/studio-access/nope', 8110)).status).toBe(400)
 	expect((await staffDelete('/api/staff/studio-access/8609', 8110)).status).toBe(404)
@@ -2748,6 +2740,7 @@ it('lets staff add, list, and remove studio upload access', async () => {
 	const removed = await staffDelete('/api/staff/studio-access/8601', 8110)
 	expect(removed.status).toBe(200)
 	expect(await removed.json()).toEqual({ accountId: 8601, granted: false, removed: true })
+	expect((await getAccount(env.DB, 8601))?.hasStudio).toBe(false)
 	const repeat = await staffDelete('/api/staff/studio-access/8601', 8110)
 	expect(await repeat.json()).toEqual({ accountId: 8601, granted: false, removed: false })
 

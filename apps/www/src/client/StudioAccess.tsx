@@ -18,9 +18,6 @@ interface AccessRow {
 	accountId: number
 	username: string | null
 	displayName: string | null
-	grantedBy: number
-	grantedByUsername: string | null
-	grantedAt: string
 }
 
 export function StudioAccessPage({
@@ -192,11 +189,9 @@ export function StudioAccessPage({
 										<strong>
 											{row.username ? `@${row.username}` : `Account ${row.accountId}`}
 										</strong>
-										<span className="muted">
-											{' '}
-											· added {new Date(row.grantedAt).toLocaleString()}
-											{row.grantedByUsername ? ` by @${row.grantedByUsername}` : ''}
-										</span>
+										{row.displayName && row.displayName !== row.username ? (
+											<span className="muted"> · {row.displayName}</span>
+										) : null}
 									</span>
 									<button
 										type="button"

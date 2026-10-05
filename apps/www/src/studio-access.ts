@@ -1,11 +1,8 @@
 import {
 	getAccount,
 	getAccountByUsername,
-	getAccountsByIds,
-	grantStudioBetaAccess,
-	hasStudioBetaAccess,
-	listStudioBetaAccess,
-	revokeStudioBetaAccess,
+	listStudioAccounts,
+	updateAccount,
 	writeAuditLog,
 } from '@repo/domain'
 import { logger } from '@repo/hono-helpers'
@@ -16,45 +13,40 @@ import type { Account } from '@repo/domain'
 import type { App } from './context'
 
 /**
- * The studio upload whitelist, as the website manages it.
+ * Studio upload access, as the website manages it.
  *
  * RecFlare Studio opens `/settings/recroomstudio` from the dialog that says the
  * account cannot upload. That page reads {@link studioAccessStatusHandler} for
  * the signed-in player. Staff add and remove people through the routes under
  * `/api/staff/studio-access`, behind the same `requireStaff` gate as moderation.
- * The table itself belongs to auth (`studio_beta_access`); a token picks the
- * role up on the next Studio sign-in or refresh.
+ * The grant is the account's `hasStudio` flag; `auth` stamps `betastudio` from it
+ * on the next Studio sign-in or refresh. Who granted what is on `audit_log`.
  */
 
-/** The signed-in player's own row, and nothing else. 401 with no session. */
+/** The signed-in player's own flag, and nothing else. 401 with no session. */
 export async function studioAccessStatusHandler(c: Context<App>) {
 	const accountId = await validateAndGetAccountId(c.req.raw, await c.env.JWT_SECRET.get())
 	if (accountId === null) return c.json({ error: 'Unauthorized' }, 401)
-	return c.json({ granted: await hasStudioBetaAccess(c.env.DB, accountId) })
+	const account = await getAccount(c.env.DB, accountId)
+	return c.json({ granted: account?.hasStudio === true })
 }
 
-/** Everyone on the whitelist, with the names the account table still has for them. */
+/** Every account with the flag set. */
 export async function listStudioAccessHandler(c: Context<App>) {
-	const rows = await listStudioBetaAccess(c.env.DB)
-	const ids = [...new Set(rows.flatMap((row) => [row.accountId, row.grantedBy]))]
-	const accounts = await getAccountsByIds(c.env.DB, ids)
-	const byId = new Map(accounts.map((account) => [account.accountId, account]))
+	const accounts = await listStudioAccounts(c.env.DB)
 	return c.json({
-		accounts: rows.map((row) => ({
-			accountId: row.accountId,
-			username: byId.get(row.accountId)?.username ?? null,
-			displayName: byId.get(row.accountId)?.displayName ?? null,
-			grantedBy: row.grantedBy,
-			grantedByUsername: byId.get(row.grantedBy)?.username ?? null,
-			grantedAt: row.grantedAt,
+		accounts: accounts.map((account) => ({
+			accountId: account.accountId,
+			username: account.username,
+			displayName: account.displayName,
 		})),
 	})
 }
 
 /**
  * Add a player, by username or account id. Unknown players are a 404 rather than
- * a row pointing at nobody. A player already on the list stays there, with the
- * original grant left as it was.
+ * a flag on an account that doesn't exist. A player who already has it keeps it,
+ * and the reply says so.
  */
 export async function grantStudioAccessHandler(c: Context<App>) {
 	const body = await c.req.json().catch(() => null)
@@ -80,25 +72,25 @@ export async function grantStudioAccessHandler(c: Context<App>) {
 		return c.json({ error: 'Name a player by username or account id' }, 400)
 	}
 
-	const inserted = await grantStudioBetaAccess(c.env.DB, account.accountId, c.get('staffId'))
+	const alreadyGranted = account.hasStudio === true
+	if (!alreadyGranted) await updateAccount(c.env.DB, account.accountId, { hasStudio: true })
 	await recordAudit(c, 'grant_studio_access', {
 		playerId: account.accountId,
 		username: account.username,
-		alreadyGranted: !inserted,
+		alreadyGranted,
 	})
 	return c.json({
 		accountId: account.accountId,
 		username: account.username,
 		granted: true,
-		alreadyGranted: !inserted,
+		alreadyGranted,
 	})
 }
 
 /**
- * Take a player off the list. An account that has since been deleted can still
- * be removed — the row is what the token reads, not the account blob. A player
- * who was not on the list answers 200 with `removed: false`, so a double click
- * is not an error. An id that matches neither a row nor an account is a 404.
+ * Take a player off the list. A player who did not have it answers 200 with
+ * `removed: false`, so a double click is not an error. An id that names no
+ * account is a 404.
  */
 export async function revokeStudioAccessHandler(c: Context<App>) {
 	const accountId = Number(c.req.param('id'))
@@ -106,11 +98,12 @@ export async function revokeStudioAccessHandler(c: Context<App>) {
 		return c.json({ error: 'A numeric player id is required' }, 400)
 	}
 	const account = await getAccount(c.env.DB, accountId)
-	const removed = await revokeStudioBetaAccess(c.env.DB, accountId)
-	if (!removed && !account) return c.json({ error: 'No player has that account id' }, 404)
+	if (!account) return c.json({ error: 'No player has that account id' }, 404)
+	const removed = account.hasStudio === true
+	if (removed) await updateAccount(c.env.DB, accountId, { hasStudio: false })
 	await recordAudit(c, 'revoke_studio_access', {
 		playerId: accountId,
-		username: account?.username ?? null,
+		username: account.username,
 		removed,
 	})
 	return c.json({ accountId, granted: false, removed })
@@ -127,9 +120,9 @@ function postedAccountId(value: unknown): number | null {
 }
 
 /**
- * Record a whitelist change on `audit_log`. Written after the change has
- * committed and never throws: the row has already changed, and a failed insert
- * must not tell the moderator it didn't.
+ * Record a change on `audit_log`. Written after the change has committed and
+ * never throws: the flag has already changed, and a failed insert must not tell
+ * the moderator it didn't.
  */
 async function recordAudit(
 	c: Context<App>,

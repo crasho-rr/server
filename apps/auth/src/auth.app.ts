@@ -12,7 +12,6 @@ import {
 	getAccountByUsername,
 	getAccountsByIds,
 	getPasswordHash,
-	hasStudioBetaAccess,
 	getRoomById,
 	hashPassword,
 	RoomInstanceType,
@@ -294,30 +293,22 @@ async function roleFilterAnswer(c: Context<App>, role: 'developer' | 'moderator'
  * is unconditional (even with no account resolved). The rest are the operator-granted
  * extras, plus `junior` off the account's own `isJunior` flag.
  *
- * `betastudio` is not an account flag and developer does not imply it. RecFlare Studio
- * treats that exact claim as Full access, which is what lets the editor upload. It is
- * added only when `studioBeta` is set, from the `studio_beta_access` whitelist. Order
- * is stable so tokens are deterministic: screenshare, developer, moderator, junior,
- * then betastudio.
+ * `betastudio` rides on the account's `hasStudio` flag, and developer does not imply it.
+ * RecFlare Studio treats that exact claim as Full access, which is what lets the editor
+ * upload; staff set the flag from the website. Order is stable so tokens are
+ * deterministic: screenshare, developer, moderator, junior, then betastudio.
  */
 function accountRoles(
-	account: Pick<Account, 'isDeveloper' | 'isModerator' | 'isJunior'> | null,
-	studioBeta = false
+	account: Pick<Account, 'isDeveloper' | 'isModerator' | 'isJunior' | 'hasStudio'> | null
 ): string[] {
 	const roles = ['screenshare']
 	if (account) {
 		if (account.isDeveloper) roles.push('developer')
 		if (account.isModerator) roles.push('moderator')
 		if (account.isJunior) roles.push('junior')
+		if (account.hasStudio) roles.push('betastudio')
 	}
-	if (studioBeta) roles.push('betastudio')
 	return roles
-}
-
-/** Whether this account is on the studio upload whitelist. A bad id is simply not. */
-async function studioBetaFor(db: D1Database, accountId: number): Promise<boolean> {
-	if (!Number.isInteger(accountId) || accountId <= 0) return false
-	return hasStudioBetaAccess(db, accountId)
 }
 
 /**
@@ -397,7 +388,7 @@ async function issueSession(c: Context<App>, accountId: number, grantType: strin
 		roleAccount.platformId ?? '',
 		accountPlatform(roleAccount),
 		jwtSecret,
-		accountRoles(roleAccount, await studioBetaFor(c.env.DB, accountId)),
+		accountRoles(roleAccount),
 		accountPrivileges(roleAccount),
 		GAME_VERSION,
 		roleAccount.hasPlus === true
@@ -902,9 +893,9 @@ const app = new Hono<App>()
 				'powers refresh on every login and every refresh grant. `junior` rides along for an',
 				'account flagged `isJunior`, and `screenshare` is on every token — it is a feature',
 				'gate the client reads, not a privilege anyone is granted. `betastudio` is stamped',
-				'only for accounts on the `studio_beta_access` whitelist (staff manage it on the',
-				'website). RecFlare Studio treats that claim as permission to upload; `developer`',
-				'does not confer it. A junior also carries',
+				'from the account’s `hasStudio` flag (staff set it on the website). RecFlare Studio',
+				'treats that claim as permission to upload; `developer` does not confer it. A junior',
+				'also carries',
 				'the `rn.privilege` CLAIM (`BanVChat`, `BanRmChat`) — scope-shaped name, but the',
 				'client reads it as a claim beside `role`, and it is absent for everyone else.',
 				'',
@@ -1413,7 +1404,7 @@ const app = new Hono<App>()
 				platformId,
 				platform,
 				jwtSecret,
-				accountRoles(roleAccount, await studioBetaFor(c.env.DB, Number(accountId))),
+				accountRoles(roleAccount),
 				accountPrivileges(roleAccount),
 				version,
 				// Rec Room Plus, off the same account read as the roles above — `econ` decides the

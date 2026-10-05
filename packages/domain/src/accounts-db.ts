@@ -157,6 +157,17 @@ export interface Account {
 	 * real: the website's claim page warns about it, and so does `grant-plus`.
 	 */
 	hasPlus?: boolean
+	/**
+	 * Whether this account may upload from Rec Room Studio. The editor decides Full access
+	 * by reading the token for a `role` claim of exactly `betastudio`, which `auth` stamps
+	 * from this flag alone — `developer` does not imply it. Staff set and clear it from the
+	 * website (`www` `/settings/recroomstudio`); an operator can too, via
+	 * `runx admin grant-studio`. Absent/false means Limited.
+	 *
+	 * Like the other flags it reaches the editor on the NEXT token: a Studio session already
+	 * open keeps its old access until it signs in again or refreshes.
+	 */
+	hasStudio?: boolean
 }
 
 interface AccountRow {
@@ -412,6 +423,19 @@ export async function getAccountsByIds(db: D1Database, ids: number[]): Promise<A
 		)
 	)
 	return parseAll(pages.flatMap((page) => page.results))
+}
+
+/**
+ * Every account flagged `hasStudio`, lowest id first — the website's staff list. A JSON
+ * scan rather than a generated column: the list is short and only staff read it.
+ */
+export async function listStudioAccounts(db: D1Database): Promise<Account[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT data FROM account WHERE json_extract(data, '$.hasStudio') = 1 ORDER BY account_id`
+		)
+		.all<AccountRow>()
+	return parseAll(results)
 }
 
 /**

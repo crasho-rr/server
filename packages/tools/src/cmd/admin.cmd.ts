@@ -186,6 +186,14 @@ const grantModerator = grantRoleCommand('grant-moderator', 'isModerator', 'moder
 const grantPlus = grantRoleCommand('grant-plus', 'hasPlus', 'Rec Room Plus', 'subscription')
 
 /**
+ * Rec Room Studio upload access, the account's `hasStudio` flag. Staff normally set it
+ * from the website (`/settings/recroomstudio`); this is the operator's way in. `auth`
+ * stamps it into the token as the `betastudio` role, so like Plus it lands on the
+ * player's next Studio sign-in or refresh.
+ */
+const grantStudio = grantRoleCommand('grant-studio', 'hasStudio', 'Rec Room Studio', 'access')
+
+/**
  * The Rec Room Plus token reload: credit every subscriber's RecCenterTokens balance by
  * `amount`, in one statement. Nothing schedules this — an operator runs it when the
  * subscription's tokens are due (`just reload-plus 1000 --remote`), so running it twice
@@ -385,7 +393,8 @@ const lookup = new Command('lookup')
 			json_extract(data, '$.lastLoginTime') AS lastLoginTime,
 			(json_extract(data, '$.passwordHash') IS NOT NULL) AS hasPassword,
 			(json_extract(data, '$.isDeveloper') = 1) AS isDeveloper,
-			(json_extract(data, '$.isModerator') = 1) AS isModerator
+			(json_extract(data, '$.isModerator') = 1) AS isModerator,
+			(json_extract(data, '$.hasStudio') = 1) AS hasStudio
 			FROM account WHERE ${where}`
 		const res = await execSql(sql, remote)
 		const row = res.results[0]
@@ -399,7 +408,7 @@ const lookup = new Command('lookup')
 				: typeof v === 'object'
 					? JSON.stringify(v)
 					: String(v as number | string | boolean)
-		const boolKeys = new Set(['hasPassword', 'isDeveloper', 'isModerator'])
+		const boolKeys = new Set(['hasPassword', 'isDeveloper', 'isModerator', 'hasStudio'])
 		const table = new Table()
 		for (const [key, value] of Object.entries(row)) {
 			const shown = boolKeys.has(key) ? (value === 1 ? 'yes' : 'no') : asText(value)
@@ -418,6 +427,7 @@ export const adminCmd = new Command('admin')
 	.addCommand(grantDeveloper)
 	.addCommand(grantModerator)
 	.addCommand(grantPlus)
+	.addCommand(grantStudio)
 	.addCommand(reloadPlus)
 	.addCommand(caiLoad)
 	.addCommand(lookup)
