@@ -8,6 +8,7 @@ import {
 	getPlayerIdsInRoom,
 	getPresences,
 	movePlayerToDorm,
+	updateAccount,
 	writeAuditLog,
 } from '@repo/domain'
 import { PlatformType } from '@repo/domain/src/enums'
@@ -1406,4 +1407,29 @@ export async function clearPasswordHandler(c: Context<App>) {
 	await recordPlayerAudit(c, 'clear_password', { playerId, hadPassword })
 	logger.info('staff cleared a password', { moderatorId: staffId(c), playerId, hadPassword })
 	return c.json({ playerId, hadPassword })
+}
+
+/**
+ * Give a player Rec Room Plus by setting `hasPlus` on their account — the same flag the
+ * Discord benefits claim and `runx admin grant-plus` set, with no Discord link involved.
+ * Developer-only. `hadPlus` says whether they already had it; granting it again succeeds,
+ * changes nothing, and is still logged.
+ *
+ * `auth` stamps the flag into the token's `rn.plus` claim, so the player has Plus from their
+ * NEXT sign-in or token refresh, not the moment this answers.
+ */
+export async function grantPlusHandler(c: Context<App>) {
+	const playerId = playerIdParam(c)
+	if (playerId === null) return c.json({ error: 'A numeric player id is required' }, 400)
+
+	// Read first: `updateAccount` creates the row when there is none.
+	const account = await getAccount(c.env.DB, playerId)
+	if (account === null) return c.json({ error: 'No such player' }, 404)
+
+	const hadPlus = account.hasPlus === true
+	if (!hadPlus) await updateAccount(c.env.DB, playerId, { hasPlus: true })
+
+	await recordPlayerAudit(c, 'grant_plus', { playerId, hadPlus })
+	logger.info('staff granted plus', { moderatorId: staffId(c), playerId, hadPlus })
+	return c.json({ playerId, hasPlus: true, hadPlus })
 }
