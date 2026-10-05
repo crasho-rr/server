@@ -408,13 +408,11 @@ const app = new Hono<App>()
 			if (!head) return c.notFound()
 			const headers = new Headers()
 			head.writeHttpMetadata(headers)
-			// workerd omits Content-Length on a null body when Content-Type is set.
-			// The editor only checks this status. The length is the R2 object size.
-			headers.delete('content-type')
-			headers.delete('content-encoding')
 			headers.set('etag', head.httpEtag)
 			headers.set('accept-ranges', 'bytes')
 			headers.set('cache-control', CACHE_CONTROL)
+			// Empty body, but the editor's "already uploaded?" check reads the size.
+			// `encodeBody: 'manual'` is what keeps Content-Length; see withDefaultCors.
 			headers.set('content-length', String(head.size))
 			return new Response(null, { status: 200, headers, encodeBody: 'manual' })
 		}
