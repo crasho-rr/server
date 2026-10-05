@@ -12,7 +12,7 @@ import type { Env } from '../../context'
 import type { HubState } from '../../notifications-hub'
 
 declare module 'cloudflare:test' {
-	interface ProvidedEnv extends Env {}
+	interface ProvidedEnv extends Env { }
 }
 
 const ORIGIN = 'https://example.com'
@@ -737,7 +737,7 @@ describe('pending queue bound', () => {
 		// Unbounded, this is what a broken delivery path fills up — and what flushPending
 		// then reads into memory in one go. Seeded straight into the object: the point is
 		// the bound, not the 500 HTTP round trips it would take to reach it.
-		const playerId = 9302
+		const playerId = 9402
 		const stub = env.RECFLARE_NOTIFICATIONS_HUB.getByName('global')
 		await runInDurableObject(stub, (_instance, state) => {
 			for (let i = 0; i < MAX_PENDING_PER_PLAYER + 100; i++) {

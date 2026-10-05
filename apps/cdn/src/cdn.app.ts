@@ -358,6 +358,26 @@ const app = new Hono<App>()
 	// wrote (`studio-room-bundles/…`), which is not the URL, so this looks the name
 	// up. Reads stay unauthenticated, same as `/avatar/` and `/room/`. HEAD is the
 	// editor's "already uploaded?" check: 200 exists, 404 does not.
+	.on(
+		'HEAD',
+		'/unityasset/:filename{.+}',
+		describeRoute({
+			tags: ['Assets'],
+			summary: 'Check that a Rec Room Studio room bundle exists',
+			description: [
+				'200 when `filename` names exactly one stored Studio bundle, 404 otherwise. The',
+				'Studio editor treats this HEAD as “already uploaded?” before it downloads the bytes',
+				'with GET. No body.',
+			].join(' '),
+			parameters: [keyParam('filename', 'The bundle filename from the room save.', true)],
+			responses: {
+				200: { description: 'The bundle exists (no body)' },
+				400: { description: 'The filename contains `..` (no body)' },
+				404: { description: 'No single stored bundle has this filename' },
+			},
+		}),
+		(c) => studioUnityAssetHead(c.env, c.req.param('filename'))
+	)
 	.get(
 		'/unityasset/:filename{.+}',
 		describeRoute({
@@ -381,54 +401,17 @@ const app = new Hono<App>()
 		}),
 		(c) => serveUnityAsset(c)
 	)
-	.on(
-		'HEAD',
-		'/unityasset/:filename{.+}',
-		describeRoute({
-			tags: ['Assets'],
-			summary: 'Check that a Rec Room Studio room bundle exists',
-			description: [
-				'200 when `filename` names exactly one stored Studio bundle, 404 otherwise. The',
-				'Studio editor treats this HEAD as “already uploaded?” before it downloads the bytes',
-				'with GET. No body.',
-			].join(' '),
-			parameters: [keyParam('filename', 'The bundle filename from the room save.', true)],
-			responses: {
-				200: { description: 'The bundle exists (no body)' },
-				400: { description: 'The filename contains `..` (no body)' },
-				404: { description: 'No single stored bundle has this filename' },
-			},
-		}),
-		async (c) => {
-			const name = c.req.param('filename')
-			if (name.includes('..')) return c.body(null, 400)
-			const key = await unityAssetR2Key(c, name)
-			if (!key) return c.notFound()
-			const head = await c.env.CDN_ASSETS.head(key)
-			if (!head) return c.notFound()
-			const headers = new Headers()
-			head.writeHttpMetadata(headers)
-			headers.set('etag', head.httpEtag)
-			headers.set('accept-ranges', 'bytes')
-			headers.set('cache-control', CACHE_CONTROL)
-			// HEAD responses are payloadless on the wire, but the editor reads the declared
-			// size before deciding whether to download the bytes. Keeping a real byte array
-			// preserves the length header while the runtime still strips the body.
-			headers.set('content-length', String(head.size))
-			return new Response(new Uint8Array(head.size), { status: 200, headers })
-		}
-	)
 
 /**
  * The R2 key for a Studio bundle filename. Null when the name is unknown, ambiguous,
  * or the studio tables have not been migrated yet.
  */
-async function unityAssetR2Key(c: Context<App>, filename: string): Promise<string | null> {
+async function unityAssetR2Key(db: D1Database, filename: string): Promise<string | null> {
 	try {
 		// Same lookup as `@repo/domain` `findStudioUnityAssetByFilename`. Inlined so this
 		// worker does not take a dependency on the domain package. More than one row is a
 		// miss: two rooms must not be served each other's bundle.
-		const { results } = await c.env.DB.prepare(
+		const { results } = await db.prepare(
 			`SELECT r2_key FROM studio_unity_asset_file WHERE filename = ?1`
 		)
 			.bind(filename)
@@ -446,9 +429,28 @@ async function unityAssetR2Key(c: Context<App>, filename: string): Promise<strin
 async function serveUnityAsset(c: Context<App>) {
 	const name = c.req.param('filename')
 	if (name.includes('..')) return c.body(null, 400)
-	const key = await unityAssetR2Key(c, name)
+	const key = await unityAssetR2Key(c.env.DB, name)
 	if (!key) return c.notFound()
 	return serveAsset(c, key)
+}
+
+/** Build the Studio bundle HEAD response outside Hono's HEAD-to-GET fallback. */
+async function studioUnityAssetHead(env: Env, name: string): Promise<Response> {
+	if (name.includes('..')) return new Response(null, { status: 400 })
+	const key = await unityAssetR2Key(env.DB, name)
+	if (!key) return new Response(null, { status: 404 })
+	const head = await env.CDN_ASSETS.head(key)
+	if (!head) return new Response(null, { status: 404 })
+
+	const headers = new Headers()
+	head.writeHttpMetadata(headers)
+	headers.set('etag', head.httpEtag)
+	headers.set('accept-ranges', 'bytes')
+	headers.set('cache-control', CACHE_CONTROL)
+	headers.set('access-control-allow-origin', '*')
+	const response = new Response(null, { status: 200, headers, encodeBody: 'manual' })
+	response.headers.set('content-length', String(head.size))
+	return response
 }
 
 // The generated spec. Documentation only — no request is validated against it (see
@@ -496,4 +498,13 @@ app.get(
 	)
 )
 
-export default app
+export default {
+	fetch(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
+		const url = new URL(request.url)
+		if (request.method === 'HEAD' && url.pathname.startsWith('/unityasset/')) {
+			const filename = decodeURIComponent(url.pathname.slice('/unityasset/'.length))
+			return studioUnityAssetHead(env, filename)
+		}
+		return app.fetch(request, env, executionCtx)
+	},
+}

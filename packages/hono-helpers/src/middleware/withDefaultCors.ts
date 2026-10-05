@@ -18,6 +18,7 @@ const preflight = cors({
 export function withDefaultCors() {
 	return async (c, next) => {
 		if (c.req.method === 'OPTIONS') return preflight(c, next)
+		if ((c.req.header('upgrade') ?? '').toLowerCase() === 'websocket') return next()
 		try {
 			await next()
 		} finally {
