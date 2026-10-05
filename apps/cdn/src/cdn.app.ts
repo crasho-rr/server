@@ -411,9 +411,8 @@ async function unityAssetR2Key(db: D1Database, filename: string): Promise<string
 		// Same lookup as `@repo/domain` `findStudioUnityAssetByFilename`. Inlined so this
 		// worker does not take a dependency on the domain package. More than one row is a
 		// miss: two rooms must not be served each other's bundle.
-		const { results } = await db.prepare(
-			`SELECT r2_key FROM studio_unity_asset_file WHERE filename = ?1`
-		)
+		const { results } = await db
+			.prepare(`SELECT r2_key FROM studio_unity_asset_file WHERE filename = ?1`)
 			.bind(filename)
 			.all<{ r2_key: string }>()
 		if (results.length !== 1) return null
@@ -427,7 +426,7 @@ async function unityAssetR2Key(db: D1Database, filename: string): Promise<string
 
 /** GET `/unityasset/:filename` — the bytes, with the same range handling as other blobs. */
 async function serveUnityAsset(c: Context<App>) {
-	const name = c.req.param('filename')
+	const name = c.req.param('filename') ?? ''
 	if (name.includes('..')) return c.body(null, 400)
 	const key = await unityAssetR2Key(c.env.DB, name)
 	if (!key) return c.notFound()
@@ -435,7 +434,7 @@ async function serveUnityAsset(c: Context<App>) {
 }
 
 /** Build the Studio bundle HEAD response outside Hono's HEAD-to-GET fallback. */
-async function studioUnityAssetHead(env: Env, name: string): Promise<Response> {
+async function studioUnityAssetHead(env: StudioAssetEnv, name: string): Promise<Response> {
 	if (name.includes('..')) return new Response(null, { status: 400 })
 	const key = await unityAssetR2Key(env.DB, name)
 	if (!key) return new Response(null, { status: 404 })
@@ -498,8 +497,19 @@ app.get(
 	)
 )
 
+/**
+ * What the Studio HEAD needs from the environment. Narrower than `Env` on purpose: the
+ * `mono` worker mounts this app with its own (superset) Env, which has no `ASSETS`
+ * binding, and the wrapper below must stay mountable there.
+ */
+type StudioAssetEnv = Pick<Env, 'DB' | 'CDN_ASSETS'>
+
 export default {
-	fetch(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
+	fetch(
+		request: Request,
+		env: StudioAssetEnv,
+		executionCtx: ExecutionContext
+	): Response | Promise<Response> {
 		const url = new URL(request.url)
 		if (request.method === 'HEAD' && url.pathname.startsWith('/unityasset/')) {
 			const filename = decodeURIComponent(url.pathname.slice('/unityasset/'.length))

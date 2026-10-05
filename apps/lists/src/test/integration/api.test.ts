@@ -16,7 +16,7 @@ import curatedLists from '../../../static/curated-lists.json'
 import type { Env } from '../../context'
 
 declare module 'cloudflare:test' {
-	interface ProvidedEnv extends Env { }
+	interface ProvidedEnv extends Env {}
 }
 
 const ORIGIN = 'https://example.com'
@@ -439,7 +439,7 @@ it('serves every capture in static/curated-lists.json by name', async () => {
 	for (const capture of curatedLists) {
 		const res = await SELF.fetch(
 			`${ORIGIN}/curatedlists?creatorAccountId=${capture.CreatorAccountId}` +
-			`&type=${capture.Type}&name=${capture.Name}`
+				`&type=${capture.Type}&name=${capture.Name}`
 		)
 		expect(res.status).toBe(200)
 		const body = await res.text()

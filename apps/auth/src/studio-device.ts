@@ -133,9 +133,7 @@ export async function beginDeviceGrant(db: D1Database): Promise<DeviceGrant> {
 
 async function readByHash(db: D1Database, deviceCode: string): Promise<GrantRow | null> {
 	return db
-		.prepare(
-			`SELECT account_id, status, expires_at FROM device_grant WHERE device_code_hash = ?1`
-		)
+		.prepare(`SELECT account_id, status, expires_at FROM device_grant WHERE device_code_hash = ?1`)
 		.bind(await sha256(deviceCode))
 		.first<GrantRow>()
 }
@@ -164,10 +162,7 @@ export async function pollDeviceGrant(db: D1Database, deviceCode: string): Promi
 }
 
 export type DeviceDecision =
-	| { kind: 'ok' }
-	| { kind: 'missing' }
-	| { kind: 'expired' }
-	| { kind: 'used' }
+	{ kind: 'ok' } | { kind: 'missing' } | { kind: 'expired' } | { kind: 'used' }
 
 async function decide(
 	db: D1Database,

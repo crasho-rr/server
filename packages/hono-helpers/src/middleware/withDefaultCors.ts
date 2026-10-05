@@ -1,5 +1,7 @@
 import { cors } from 'hono/cors'
 
+import type { MiddlewareHandler } from 'hono'
+
 const preflight = cors({
 	origin: '*',
 	allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
@@ -15,7 +17,7 @@ const preflight = cors({
  * Set the header after `next()` so the route's Response stays as it was.
  * OPTIONS still uses Hono's preflight response.
  */
-export function withDefaultCors() {
+export function withDefaultCors(): MiddlewareHandler {
 	return async (c, next) => {
 		if (c.req.method === 'OPTIONS') return preflight(c, next)
 		if ((c.req.header('upgrade') ?? '').toLowerCase() === 'websocket') return next()

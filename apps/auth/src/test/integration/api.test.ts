@@ -32,7 +32,11 @@ import {
 	PLATFORM_SCHEMA_DDL,
 } from '../../platform-db'
 import { consumeRefreshToken, issueRefreshToken, REFRESH_SCHEMA_DDL } from '../../refresh-db'
-import { STUDIO_CLIENT_ID, STUDIO_CLIENT_SECRET, STUDIO_DEVICE_SCHEMA_DDL } from '../../studio-device'
+import {
+	STUDIO_CLIENT_ID,
+	STUDIO_CLIENT_SECRET,
+	STUDIO_DEVICE_SCHEMA_DDL,
+} from '../../studio-device'
 
 import type { Env } from '../../context'
 
@@ -788,7 +792,7 @@ describe('auth worker routes', () => {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/x-www-form-urlencoded',
-				Authorization: `Bearer ${session.json.access_token}`,
+				Authorization: `Bearer ${session.json.access_token as string}`,
 			},
 			body: `user_code=${codes.user_code}`,
 		})
@@ -1780,7 +1784,7 @@ describe('auth worker routes', () => {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/x-www-form-urlencoded',
-				Authorization: `Bearer ${session.json.access_token}`,
+				Authorization: `Bearer ${session.json.access_token as string}`,
 			},
 			body: `user_code=${codes.user_code}`,
 		})

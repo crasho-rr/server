@@ -12,7 +12,7 @@ import type { Env } from '../../context'
 import type { HubState } from '../../notifications-hub'
 
 declare module 'cloudflare:test' {
-	interface ProvidedEnv extends Env { }
+	interface ProvidedEnv extends Env {}
 }
 
 const ORIGIN = 'https://example.com'

@@ -1,12 +1,7 @@
 import { adminSecretsStore, env, SELF } from 'cloudflare:test'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import {
-	PRESENCE_SCHEMA_DDL,
-	ROOM_SCHEMA_DDL,
-	SUBROOM_SCHEMA_DDL,
-	setPresence,
-} from '@repo/domain'
+import { PRESENCE_SCHEMA_DDL, ROOM_SCHEMA_DDL, setPresence, SUBROOM_SCHEMA_DDL } from '@repo/domain'
 
 import { STUDIO_CLOUD_BUILD_SCHEMA_DDL } from '../../local-builds'
 
@@ -44,7 +39,11 @@ async function bearer(sub: string, roles?: string[]): Promise<Record<string, str
 	return { Authorization: `Bearer ${signingInput}.${b64url(sig)}` }
 }
 
-async function insertRoom(roomId: number, creatorAccountId: number, roles: unknown[]): Promise<void> {
+async function insertRoom(
+	roomId: number,
+	creatorAccountId: number,
+	roles: unknown[]
+): Promise<void> {
 	await env.DB.prepare('INSERT INTO room (data) VALUES (?1)')
 		.bind(
 			JSON.stringify({

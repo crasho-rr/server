@@ -5,19 +5,19 @@ authenticates players and issues the JWTs every other worker verifies.
 
 ## Routes
 
-| Method | Path                                       | Description                                            |
-| ------ | ------------------------------------------ | ------------------------------------------------------ |
-| GET    | `/eac/challenge`                           | EAC handshake; a constant, JSON-quoted, as text        |
-| GET    | `/cachedlogin/forplatformid/:platform/:id` | Accounts linked to a platform id, for the login screen |
-| POST   | `/cachedlogin/forplatformids`              | Bulk cached-login lookup (friends resolution)          |
-| POST   | `/connect/deviceauthorization`             | Studio device login: mint a user code and point the browser at WWW `/device` |
-| POST   | `/connect/device/approve`                  | Website approves that code for the signed-in account  |
-| POST   | `/connect/device/deny`                     | Website refuses it                                     |
+| Method | Path                                       | Description                                                                                      |
+| ------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| GET    | `/eac/challenge`                           | EAC handshake; a constant, JSON-quoted, as text                                                  |
+| GET    | `/cachedlogin/forplatformid/:platform/:id` | Accounts linked to a platform id, for the login screen                                           |
+| POST   | `/cachedlogin/forplatformids`              | Bulk cached-login lookup (friends resolution)                                                    |
+| POST   | `/connect/deviceauthorization`             | Studio device login: mint a user code and point the browser at WWW `/device`                     |
+| POST   | `/connect/device/approve`                  | Website approves that code for the signed-in account                                             |
+| POST   | `/connect/device/deny`                     | Website refuses it                                                                               |
 | POST   | `/connect/token`                           | OAuth token endpoint; issues a JWT + refresh token. Studio polls this with the device-code grant |
-| POST   | `/account/me/changepassword`               | Change the caller's password (auth-gated)              |
-| GET    | `/role/developer/:id`                      | Developer role lookup; a bare JSON boolean             |
-| GET    | `/role/moderator/:id`                      | Moderator role lookup; a bare JSON boolean             |
-| GET    | `/openapi.json`                            | Generated OpenAPI 3.1 spec (see below)                 |
+| POST   | `/account/me/changepassword`               | Change the caller's password (auth-gated)                                                        |
+| GET    | `/role/developer/:id`                      | Developer role lookup; a bare JSON boolean                                                       |
+| GET    | `/role/moderator/:id`                      | Moderator role lookup; a bare JSON boolean                                                       |
+| GET    | `/openapi.json`                            | Generated OpenAPI 3.1 spec (see below)                                                           |
 
 ## API documentation
 
@@ -135,12 +135,12 @@ small private server, or when a shared network is being locked out.
 
 ## Bindings
 
-| Binding              | Type          | Notes                                                                            |
-| -------------------- | ------------- | -------------------------------------------------------------------------------- |
-| `DB`                 | D1            | Shared `recflare` database. Owns `account`, `refresh_tokens`, `platform_account` |
-| `JWT_SECRET`         | Secrets Store | Shared HS256 signing key                                                         |
-| `META_APP_SECRET`    | Secrets Store | Meta app secret; only used to validate a login nonce                             |
-| `MAX_ACCOUNTS_PER_*` | vars          | Optional signup caps; read via `intVar`                                          |
+| Binding              | Type          | Notes                                                                                           |
+| -------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
+| `DB`                 | D1            | Shared `recflare` database; this worker owns `account`, `refresh_tokens` and `platform_account` |
+| `JWT_SECRET`         | Secrets Store | Shared HS256 signing key                                                                        |
+| `META_APP_SECRET`    | Secrets Store | Meta app secret; only used to validate a login nonce                                            |
+| `MAX_ACCOUNTS_PER_*` | vars          | Optional signup caps; read via `intVar`                                                         |
 
 Migrations live in `migrations/` and are tracked in their own `d1_migrations_auth`
 table, so they stay independent of the `rooms` worker's migrations on the same

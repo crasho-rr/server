@@ -17,9 +17,9 @@ import {
 	MessageType,
 	NOTIFICATION_SCHEMA_DDL,
 	PRESENCE_SCHEMA_DDL,
+	publicStudioBundleFilename,
 	ROOM_INSTANCE_SCHEMA_DDL,
 	ROOM_INVITE_SCHEMA_DDL,
-	publicStudioBundleFilename,
 	ROOM_SCHEMA_DDL,
 	seedRoomWithSubRooms,
 	sha256HexToBase64,
@@ -5648,28 +5648,21 @@ describe('studio room bundles', () => {
 
 	async function storeFiles() {
 		for (const sql of STUDIO_UNITY_ASSET_SCHEMA_DDL) await env.DB.prepare(sql).run()
-		await env.DB
-			.prepare(
-				`INSERT INTO studio_cloud_build
+		await env.DB.prepare(
+			`INSERT INTO studio_cloud_build
 				 (cloud_build_id, room_id, sub_room_id, sub_room_data_save_id, unity_asset_id,
 				  created_by_account_id, started_at, completed_at, error)
 				 VALUES ('build-1', 9901, 99011, 0, ?1, 42, '2026-10-03T00:00:00.000Z',
 				         '2026-10-03T00:00:00.000Z', NULL)`
-			)
+		)
 			.bind(ASSET)
 			.run()
-		const insert = async (
-			platform: string,
-			kind: string,
-			filename: string,
-			sha256: string
-		) => {
-			await env.DB
-				.prepare(
-					`INSERT INTO studio_unity_asset_file
+		const insert = async (platform: string, kind: string, filename: string, sha256: string) => {
+			await env.DB.prepare(
+				`INSERT INTO studio_unity_asset_file
 					 (unity_asset_id, platform, kind, filename, sha256, byte_length, r2_key)
 					 VALUES (?1, ?2, ?3, ?4, ?5, 4, ?6)`
-				)
+			)
 				.bind(ASSET, platform, kind, filename, sha256, `studio-room-bundles/${filename}`)
 				.run()
 		}
@@ -5751,9 +5744,7 @@ describe('studio room bundles', () => {
 			filename: winName,
 			hash: winHash,
 		})
-		expect(
-			(await SELF.fetch(`${ORIGIN}/rooms/9901/subrooms/99011/unityasset`)).status
-		).toBe(404)
+		expect((await SELF.fetch(`${ORIGIN}/rooms/9901/subrooms/99011/unityasset`)).status).toBe(404)
 		expect(
 			(
 				await SELF.fetch(
@@ -5762,11 +5753,8 @@ describe('studio room bundles', () => {
 			).status
 		).toBe(404)
 		expect(
-			(
-				await SELF.fetch(
-					`${ORIGIN}/rooms/9902/subrooms/99021/unityasset?unityAssetId=${ASSET}`
-				)
-			).status
+			(await SELF.fetch(`${ORIGIN}/rooms/9902/subrooms/99021/unityasset?unityAssetId=${ASSET}`))
+				.status
 		).toBe(404)
 
 		const detail = await SELF.fetch(
@@ -5785,10 +5773,9 @@ describe('studio room bundles', () => {
 			unityAssetHash: androidHash,
 		})
 
-		const light = await SELF.fetch(
-			`${ORIGIN}/rooms/9901/subrooms/99011/saves/no_unity_assets`,
-			{ headers: await bearer('1') }
-		)
+		const light = await SELF.fetch(`${ORIGIN}/rooms/9901/subrooms/99011/saves/no_unity_assets`, {
+			headers: await bearer('1'),
+		})
 		const page = (await light.json()) as { Results: Array<Record<string, unknown>> }
 		expect(page.Results[0]).not.toHaveProperty('UnitySubAssets')
 		expect(page.Results[0]).not.toHaveProperty('ReferencedUnityAssets')

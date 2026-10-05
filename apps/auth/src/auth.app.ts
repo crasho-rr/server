@@ -302,12 +302,11 @@ function accountRoles(
 	account: Pick<Account, 'isDeveloper' | 'isModerator' | 'isJunior' | 'hasStudio'> | null
 ): string[] {
 	const roles = ['screenshare']
-	if (account) {
-		if (account.isDeveloper) roles.push('developer')
-		if (account.isModerator) roles.push('moderator')
-		if (account.isJunior) roles.push('junior')
-		if (account.hasStudio) roles.push('betastudio')
-	}
+	if (!account) return roles
+	if (account.isDeveloper) roles.push('developer')
+	if (account.isModerator) roles.push('moderator')
+	if (account.isJunior) roles.push('junior')
+	if (account.hasStudio) roles.push('betastudio')
 	return roles
 }
 
@@ -434,10 +433,7 @@ async function issueSession(c: Context<App>, accountId: number, grantType: strin
 	})
 }
 
-async function decideDeviceCode(
-	c: Context<App>,
-	decide: typeof approveDeviceGrant
-) {
+async function decideDeviceCode(c: Context<App>, decide: typeof approveDeviceGrant) {
 	const id = await authedId(c)
 	if (id === null) return c.body(null, 401)
 	const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
@@ -446,8 +442,7 @@ async function decideDeviceCode(
 	if (result.kind === 'ok') return c.json({ ok: true as const })
 	if (result.kind === 'expired')
 		return oauthError(c, 'expired_token', 'that code has expired. Start the login in Studio again.')
-	if (result.kind === 'used')
-		return oauthError(c, 'invalid_grant', 'that code was already used.')
+	if (result.kind === 'used') return oauthError(c, 'invalid_grant', 'that code was already used.')
 	return oauthError(c, 'invalid_grant', 'that code was not found.')
 }
 
@@ -957,7 +952,11 @@ const app = new Hono<App>()
 				const deviceCode = typeof body.device_code === 'string' ? body.device_code : ''
 				const polled = await pollDeviceGrant(c.env.DB, deviceCode)
 				if (polled.kind === 'pending') {
-					return oauthError(c, 'authorization_pending', 'the player has not approved this login yet')
+					return oauthError(
+						c,
+						'authorization_pending',
+						'the player has not approved this login yet'
+					)
 				}
 				if (polled.kind === 'denied') {
 					return oauthError(c, 'access_denied', 'the player denied this login')
