@@ -411,10 +411,11 @@ const app = new Hono<App>()
 			headers.set('etag', head.httpEtag)
 			headers.set('accept-ranges', 'bytes')
 			headers.set('cache-control', CACHE_CONTROL)
-			// Empty body, but the editor's "already uploaded?" check reads the size.
-			// `encodeBody: 'manual'` is what keeps Content-Length; see withDefaultCors.
+			// HEAD responses are payloadless on the wire, but the editor reads the declared
+			// size before deciding whether to download the bytes. Keeping a real byte array
+			// preserves the length header while the runtime still strips the body.
 			headers.set('content-length', String(head.size))
-			return new Response(null, { status: 200, headers, encodeBody: 'manual' })
+			return new Response(new Uint8Array(head.size), { status: 200, headers })
 		}
 	)
 
