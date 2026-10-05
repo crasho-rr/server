@@ -40,7 +40,7 @@ const USER_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const USER_CODE_LENGTH = 8
 
 export const STUDIO_DEVICE_SCHEMA_DDL: string[] = [
-	`CREATE TABLE IF NOT EXISTS studio_device_grant (
+	`CREATE TABLE IF NOT EXISTS device_grant (
 		device_code_hash TEXT PRIMARY KEY,
 		user_code TEXT NOT NULL UNIQUE,
 		account_id INTEGER,
@@ -111,7 +111,7 @@ export async function beginDeviceGrant(db: D1Database): Promise<DeviceGrant> {
 		try {
 			await db
 				.prepare(
-					`INSERT INTO studio_device_grant
+					`INSERT INTO device_grant
 					 (device_code_hash, user_code, account_id, status, created_at, expires_at)
 					 VALUES (?1, ?2, NULL, 'pending', ?3, ?4)`
 				)
@@ -134,7 +134,7 @@ export async function beginDeviceGrant(db: D1Database): Promise<DeviceGrant> {
 async function readByHash(db: D1Database, deviceCode: string): Promise<GrantRow | null> {
 	return db
 		.prepare(
-			`SELECT account_id, status, expires_at FROM studio_device_grant WHERE device_code_hash = ?1`
+			`SELECT account_id, status, expires_at FROM device_grant WHERE device_code_hash = ?1`
 		)
 		.bind(await sha256(deviceCode))
 		.first<GrantRow>()
@@ -154,7 +154,7 @@ export async function pollDeviceGrant(db: D1Database, deviceCode: string): Promi
 
 	const consumed = await db
 		.prepare(
-			`UPDATE studio_device_grant SET status = 'consumed'
+			`UPDATE device_grant SET status = 'consumed'
 			 WHERE device_code_hash = ?1 AND status = 'approved' AND expires_at > ?2`
 		)
 		.bind(await sha256(deviceCode), nowSeconds())
@@ -179,7 +179,7 @@ async function decide(
 	if (code === '') return { kind: 'missing' }
 	const updated = await db
 		.prepare(
-			`UPDATE studio_device_grant
+			`UPDATE device_grant
 			 SET status = ?2, account_id = ?3
 			 WHERE user_code = ?1 AND status = 'pending' AND expires_at > ?4`
 		)
@@ -188,7 +188,7 @@ async function decide(
 	if ((updated.meta.changes ?? 0) > 0) return { kind: 'ok' }
 
 	const row = await db
-		.prepare(`SELECT status, expires_at, account_id FROM studio_device_grant WHERE user_code = ?1`)
+		.prepare(`SELECT status, expires_at, account_id FROM device_grant WHERE user_code = ?1`)
 		.bind(code)
 		.first<{ status: GrantStatus; expires_at: number; account_id: number | null }>()
 	if (!row) return { kind: 'missing' }
